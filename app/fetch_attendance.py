@@ -9,6 +9,7 @@ from playwright.sync_api import sync_playwright
 def format_utc_to_ist(time_str):
     if not time_str:
         return "Not Yet Out"
+    # Strip milliseconds if present
     if "." in time_str:
         time_str = time_str.split(".")[0]
     dt = datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S")
@@ -23,18 +24,24 @@ def fetch_in_out_time(domain, username, password, target_date):
         page = context.new_page()
 
         print("Logging in to GreytHR...")
-        page.goto(f"https://{domain}.greythr.com")
-        
+        try:
+            page.goto(f"https://{domain}.greythr.com", timeout=30000)
+        except Exception as e:
+            print("Failed to reach GreytHR. Check your internet connection or domain:", e)
+            browser.close()
+            return
+
         try:
             page.locator("input[name='username'], input[id='username'], input[placeholder*='Login']").first.fill(username)
             page.locator("input[type='password']").first.fill(password)
             page.keyboard.press("Enter")
-            
+
             # Wait for dashboard
-            page.wait_for_selector("text=Sign Out", timeout=15000)
+            page.wait_for_selector("text=Sign Out", timeout=20000)
             print("Login successful. Extracting internal employee ID...")
         except Exception as e:
             print("Failed to login or dashboard didn't load:", e)
+            print("Please check your GREYTHR_USERNAME and GREYTHR_PASSWORD in the .env file.")
             browser.close()
             return
 
@@ -53,13 +60,13 @@ def fetch_in_out_time(domain, username, password, target_date):
             page.get_by_role("complementary").locator("a").filter(has_text=re.compile(r"^Attendance$")).click()
             page.wait_for_timeout(1000)
             page.locator("a.secondary-link:has-text('Attendance Info')").first.click()
-            
+
             # Wait a few seconds for the request to be intercepted
             for _ in range(10):
                 if internal_emp_id:
                     break
                 page.wait_for_timeout(500)
-                
+
         except Exception as e:
             print("Failed to navigate to Attendance Info:", e)
             browser.close()
@@ -83,31 +90,43 @@ def fetch_in_out_time(domain, username, password, target_date):
         }
 
         print(f"Fetching attendance for {target_date}...")
-        response = page.request.get(swipes_url, params=params)
-        
+        try:
+            response = page.request.get(swipes_url, params=params)
+        except Exception as e:
+            print("Failed to make API request to GreytHR:", e)
+            browser.close()
+            return
+
+        result = None
+
         if response.ok:
             data = response.json()
             swipes = data.get("swipe", [])
-            
+
             if swipes:
                 swipes.sort(key=lambda x: x.get("punchDateTime", ""))
-                
+
                 print(f"\n--- Attendance Details for {target_date} ---")
-                
+
                 current_in = None
                 current_out = None
                 last_out_time = None
-                
+
                 for s in swipes:
                     is_in = s.get("inOutIndicator") == 1
                     dt_str = s.get("punchDateTime")
                     if not dt_str:
                         continue
-                    
+
+                    # Strip milliseconds if present
                     if "." in dt_str:
                         dt_str = dt_str.split(".")[0]
-                    dt_obj = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Asia/Kolkata"))
-                    
+
+                    try:
+                        dt_obj = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Asia/Kolkata"))
+                    except ValueError:
+                        continue
+
                     if is_in:
                         current_in = dt_obj
                         if last_out_time:
@@ -118,31 +137,31 @@ def fetch_in_out_time(domain, username, password, target_date):
                             print(f"\n[ Break: {break_str} ]\n")
                     else:
                         current_out = dt_obj
-                        
+
                     if current_in and current_out:
                         print(f"In-Time:      {current_in.strftime('%Y-%m-%d %I:%M:%S %p IST')}")
                         print(f"Out-Time:     {current_out.strftime('%Y-%m-%d %I:%M:%S %p IST')}")
                         last_out_time = current_out
                         current_in = None
                         current_out = None
-                        
+
                 # Handle the case where they are currently working (no final out-time)
                 if current_in and not current_out:
                     print(f"In-Time:      {current_in.strftime('%Y-%m-%d %I:%M:%S %p IST')}")
                     print(f"Out-Time:     Not Yet Out")
-                    
+
                 print("-------------------------------------------\n")
-                
-                return {
-                    "swipes": swipes
-                }
+
+                result = {"swipes": swipes}
             else:
                 print(f"No swipes found for {target_date}.")
         else:
             print(f"Failed to fetch swipes API: {response.status} {response.status_text}")
             print(response.text())
-            
+
+        # Always close the browser cleanly
         browser.close()
+        return result
 
 def main():
     load_dotenv()
@@ -154,7 +173,7 @@ def main():
         print("Missing required environment variables in .env.")
         print("Please ensure GREYTHR_DOMAIN, GREYTHR_USERNAME, and GREYTHR_PASSWORD are set.")
         return
-        
+
     parser = argparse.ArgumentParser(description="Fetch In-Time and Out-Time from GreytHR for a specific date using Playwright.")
     parser.add_argument("--date", type=str, required=True, help="Date to fetch attendance for in YYYY-MM-DD format (e.g., 2023-10-25).")
     args = parser.parse_args()
