@@ -39,7 +39,9 @@ echo.
 
 :: 3. Install Playwright Chromium
 echo [3/4] Installing Playwright (Chromium)...
-set PLAYWRIGHT_BROWSERS_PATH=0
+
+:: Install browser into local project folder to bypass corporate AppData restrictions
+set PLAYWRIGHT_BROWSERS_PATH=%~dp0.browsers
 python -m playwright install chromium
 IF %ERRORLEVEL% NEQ 0 (
     echo ERROR: Failed to install Playwright browsers.

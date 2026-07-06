@@ -12,3 +12,6 @@ __pycache__/
 
 # Archives
 *.zip
+
+# Local Playwright browser binaries (downloaded by setup.bat)
+.browsers/

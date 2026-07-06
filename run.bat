@@ -23,7 +23,8 @@ echo.
 echo Starting automation...
 echo.
 
-set PLAYWRIGHT_BROWSERS_PATH=0
+:: Point Playwright to the local browser installation in the project folder
+set PLAYWRIGHT_BROWSERS_PATH=%~dp0.browsers
 
 if "%target_date%"=="" (
     python app\automate_karyakeeper.py
