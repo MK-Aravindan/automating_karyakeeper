@@ -5,6 +5,9 @@
 auth.json
 kk_auth.json
 
+# Streamlit app's saved timesheet progress (local to each machine)
+.streamlit_state.json
+
 # Python
 __pycache__/
 *.py[cod]

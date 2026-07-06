@@ -38,18 +38,22 @@ IF NOT EXIST ".env" (
     exit /b 1
 )
 
-echo Enter the date to log (YYYY-MM-DD) or press Enter to use today's date:
-set /p target_date=
-
-echo.
-echo Starting automation...
-echo.
-
-if "%target_date%"=="" (
-    %PY_CMD% app\automate_karyakeeper.py
-) else (
-    %PY_CMD% app\automate_karyakeeper.py --date "%target_date%"
+:: Pre-seed Streamlit's credentials file so its first-run "enter your email" prompt
+:: never appears and blocks this window waiting for input
+IF NOT EXIST "%USERPROFILE%\.streamlit" mkdir "%USERPROFILE%\.streamlit"
+IF NOT EXIST "%USERPROFILE%\.streamlit\credentials.toml" (
+    (
+        echo [general]
+        echo email = ""
+    ) > "%USERPROFILE%\.streamlit\credentials.toml"
 )
+
+echo.
+echo Starting KaryaKeeper Automation web app...
+echo A browser tab will open automatically. Close this window to stop the app.
+echo.
+
+%PY_CMD% -m streamlit run app\streamlit_app.py
 
 echo.
 pause
