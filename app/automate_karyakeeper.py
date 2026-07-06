@@ -1,162 +1,17 @@
 import os
 import sys
 import argparse
-import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 from fetch_attendance import fetch_in_out_time
+import karyakeeper_core as kkc
 
-# Resolve paths relative to THIS script's location, not the working directory
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+SCRIPT_DIR = kkc.SCRIPT_DIR
+ROOT_DIR = kkc.ROOT_DIR
 
-def round_dt_15_mins(dt):
-    if not dt:
-        return None
-    minute = (dt.minute // 15) * 15
-    if dt.minute % 15 > 10:
-        minute += 15
-    dt_rounded = dt.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=minute)
-    return dt_rounded
-
-def parse_punch_dt(dt_str):
-    """Safely parse a punchDateTime string, stripping milliseconds if present."""
-    if not dt_str:
-        return None
-    if "." in dt_str:
-        dt_str = dt_str.split(".")[0]
-    try:
-        return datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
-    except ValueError:
-        return None
-
-def consolidate_blocks(swipes):
-    blocks = []
-    current_in = None
-    current_out = None
-
-    for swipe in sorted(swipes, key=lambda x: x.get('punchDateTime', '')):
-        pt = parse_punch_dt(swipe.get('punchDateTime'))
-        if pt is None:
-            continue
-        indicator = swipe.get('inOutIndicator')
-
-        if indicator == 1:  # IN
-            if current_in is None:
-                current_in = pt
-            else:
-                if current_out is not None:
-                    diff = (pt - current_out).total_seconds() / 60.0
-                    if diff > 15:
-                        blocks.append((current_in, current_out))
-                        current_in = pt
-                    current_out = None
-        else:  # OUT
-            if current_in is not None:
-                current_out = pt
-
-    if current_in is not None:
-        blocks.append((current_in, current_out))
-
-    return blocks
-
-def filter_existing_blocks(blocks, existing_times, target_date):
-    covered_segments = set()
-    for s_str, e_str in existing_times:
-        try:
-            s_time = datetime.strptime(f"{target_date} {s_str}", "%Y-%m-%d %H:%M")
-            e_time = datetime.strptime(f"{target_date} {e_str}", "%Y-%m-%d %H:%M")
-            curr = s_time
-            while curr < e_time:
-                covered_segments.add(curr)
-                curr += timedelta(minutes=15)
-        except Exception:
-            pass
-
-    filtered_blocks = []
-
-    for start_dt, end_dt in blocks:
-        start_r = round_dt_15_mins(start_dt)
-        if end_dt:
-            end_r = round_dt_15_mins(end_dt)
-            is_running = False
-        else:
-            now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
-            end_r = round_dt_15_mins(now_ist)
-            is_running = True
-
-        if end_r <= start_r:
-            end_r = start_r + timedelta(minutes=15)
-
-        uncovered = []
-        curr = start_r
-        while curr < end_r:
-            if curr not in covered_segments:
-                uncovered.append(curr)
-            curr += timedelta(minutes=15)
-
-        if not uncovered:
-            continue
-
-        uncovered.sort()
-        curr_start = uncovered[0]
-        prev = uncovered[0]
-
-        for seg in uncovered[1:]:
-            if seg == prev + timedelta(minutes=15):
-                prev = seg
-            else:
-                filtered_blocks.append((curr_start, prev + timedelta(minutes=15), False))
-                curr_start = seg
-                prev = seg
-
-        final_end = prev + timedelta(minutes=15)
-        running_flag = is_running if final_end == end_r else False
-        filtered_blocks.append((curr_start, final_end, running_flag))
-
-    return filtered_blocks
-
-def process_and_chunk_blocks(filtered_blocks):
-    chunked = []
-    for start_r, end_r, is_running in filtered_blocks:
-        curr_start = start_r
-        while True:
-            diff_hours = (end_r - curr_start).total_seconds() / 3600.0
-            if diff_hours <= 0:
-                break
-            if diff_hours <= 3.0:
-                chunked.append((curr_start, end_r, is_running))
-                break
-            else:
-                chunk_end = curr_start + timedelta(hours=3)
-                chunked.append((curr_start, chunk_end, False))
-                curr_start = chunk_end
-    return chunked
-
-def cleanup_auth_files():
-    """Remove session files from the root project directory."""
-    for f in ["auth.json", "kk_auth.json"]:
-        full_path = os.path.join(ROOT_DIR, f)
-        if os.path.exists(full_path):
-            try:
-                os.remove(full_path)
-            except Exception:
-                pass
-
-def validate_date(date_str):
-    """Validate that the date string is in YYYY-MM-DD format."""
-    try:
-        datetime.strptime(date_str, "%Y-%m-%d")
-        return True
-    except ValueError:
-        return False
-
-def js_safe(s):
-    """Escape a string safely for inline JS single-quote context."""
-    return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", "")
 
 def main():
     load_dotenv(os.path.join(ROOT_DIR, ".env"))
@@ -187,7 +42,7 @@ def main():
     args = parser.parse_args()
 
     if args.date:
-        if not validate_date(args.date):
+        if not kkc.validate_date(args.date):
             print(f"Invalid date format: '{args.date}'. Please use YYYY-MM-DD (e.g. 2026-07-06).")
             return
         target_date = args.date
@@ -199,82 +54,41 @@ def main():
 
     if not attendance or not attendance.get("swipes"):
         print("No punches found for this date. Exiting.")
-        cleanup_auth_files()
+        kkc.cleanup_auth_files()
         return
 
     swipes = attendance["swipes"]
-    blocks = consolidate_blocks(swipes)
+    blocks = kkc.consolidate_blocks(swipes)
 
     if not blocks:
         print("Could not build any work blocks from the swipe data. Exiting.")
-        cleanup_auth_files()
+        kkc.cleanup_auth_files()
         return
 
     print("\n[2/4] Logging into KaryaKeeper...")
-
-    kk_auth_path = os.path.join(ROOT_DIR, "kk_auth.json")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
 
         try:
-            if os.path.exists(kk_auth_path):
-                context = browser.new_context(storage_state=kk_auth_path)
+            if os.path.exists(kkc.KK_AUTH_PATH):
+                context = browser.new_context(storage_state=kkc.KK_AUTH_PATH)
             else:
                 context = browser.new_context()
 
             page = context.new_page()
-            page.goto(kk_url, timeout=30000)
 
             try:
-                page.wait_for_selector("text=Dashboard", timeout=5000)
-                needs_login = False
-            except Exception:
-                needs_login = True
-
-            if needs_login:
-                page.locator("#login-email, input[name='email']").first.fill(kk_user)
-                page.locator("#login-password, input[name='password']").first.fill(kk_pass)
-                page.keyboard.press("Enter")
-
-                try:
-                    page.wait_for_selector("text=Dashboard", timeout=30000)
-                    context.storage_state(path=kk_auth_path)
-                except Exception as e:
-                    print("Failed to log into KaryaKeeper:", e)
-                    print("Please check your KARYAKEEPER_USERNAME and KARYAKEEPER_PASSWORD in the .env file.")
-                    browser.close()
-                    cleanup_auth_files()
-                    return
+                kkc.login_karyakeeper(context, page, kk_url, kk_user, kk_pass)
+            except Exception as e:
+                print("Failed to log into KaryaKeeper:", e)
+                print("Please check your KARYAKEEPER_USERNAME and KARYAKEEPER_PASSWORD in the .env file.")
+                browser.close()
+                kkc.cleanup_auth_files()
+                return
 
             print(f"\n[3/4] Fetching existing entries for {target_date} from KaryaKeeper...")
-            page.goto(kk_url.rstrip('/') + "/timesheet")
-            page.wait_for_load_state("networkidle")
-
-            dt_obj = datetime.strptime(target_date, "%Y-%m-%d")
-            target_date_str = dt_obj.strftime("%d %B %Y")
-
-            js_code = f"""
-            () => {{
-                let targetRows = [];
-                document.querySelectorAll('.table-responsive-md').forEach(div => {{
-                    let dateText = div.previousElementSibling ? div.previousElementSibling.innerText : '';
-                    if (dateText.includes('{target_date_str}')) {{
-                        div.querySelectorAll('tbody tr').forEach(tr => {{
-                            targetRows.push(Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim()));
-                        }});
-                    }}
-                }});
-                return targetRows;
-            }}
-            """
-            rows = page.evaluate(js_code)
-
-            existing_times = []
-            for r in rows:
-                if len(r) >= 6:
-                    if re.match(r"^\d{2}:\d{2}$", r[4]) and re.match(r"^\d{2}:\d{2}$", r[5]):
-                        existing_times.append((r[4], r[5]))
+            existing_times = kkc.fetch_existing_entries(page, kk_url, target_date)
 
             if existing_times:
                 print("Found existing time entries:")
@@ -283,13 +97,13 @@ def main():
             else:
                 print("No existing time entries found.")
 
-            filtered_blocks = filter_existing_blocks(blocks, existing_times, target_date)
-            chunked_blocks = process_and_chunk_blocks(filtered_blocks)
+            filtered_blocks = kkc.filter_existing_blocks(blocks, existing_times, target_date)
+            chunked_blocks = kkc.process_and_chunk_blocks(filtered_blocks)
 
             if not chunked_blocks:
                 print("\nAll time blocks for this date have already been logged. Exiting.")
                 browser.close()
-                cleanup_auth_files()
+                kkc.cleanup_auth_files()
                 return
 
             print("\nFiltered & Chunked Work Blocks (Max 3 hours):")
@@ -300,14 +114,12 @@ def main():
                 print(f"  Block {idx+1}: {start_str} to {end_str}{running_label}")
 
             print("\nNavigating to Timesheet creation...")
-            page.goto(kk_url.rstrip('/') + "/timesheet?action=create")
-            page.wait_for_load_state("networkidle")
-
-            projects = page.locator("#logProjects option").evaluate_all("els => els.map(e => ({text: e.innerText.trim(), value: e.value})).filter(e => e.value)")
+            dt_obj = datetime.strptime(target_date, "%Y-%m-%d")
+            projects = kkc.fetch_projects(page, kk_url)
             if not projects:
                 print("No projects found! Please check your KaryaKeeper account.")
                 browser.close()
-                cleanup_auth_files()
+                kkc.cleanup_auth_files()
                 return
 
             print("\n[4/4] Timesheet Details")
@@ -337,7 +149,7 @@ def main():
                         if p_input.lower() == 'q':
                             print("Exiting... Entries already logged have been saved.")
                             browser.close()
-                            cleanup_auth_files()
+                            kkc.cleanup_auth_files()
                             return
                         if p_input == '0':
                             print(f"\n--- Edit Time for Entry {current_idx+1} ---")
@@ -373,18 +185,13 @@ def main():
                     except (KeyboardInterrupt, EOFError):
                         print("\nExiting...")
                         browser.close()
-                        cleanup_auth_files()
+                        kkc.cleanup_auth_files()
                         return
 
                 # --- Task fetch ---
                 print("Loading tasks...")
                 try:
-                    task_res = page.request.get(f"{kk_url.rstrip('/')}/project/timesheet/task?projectId={selected_project}")
-                    if not task_res.ok:
-                        print(f"Failed to fetch tasks (HTTP {task_res.status}). Skipping this block.")
-                        current_idx += 1
-                        continue
-                    tasks = task_res.json().get("results", [])
+                    tasks = kkc.fetch_tasks(page, kk_url, selected_project)
                 except Exception as e:
                     print(f"Error fetching tasks: {e}. Skipping this block.")
                     current_idx += 1
@@ -411,7 +218,7 @@ def main():
                         if t_input.lower() == 'q':
                             print("Exiting... Entries already logged have been saved.")
                             browser.close()
-                            cleanup_auth_files()
+                            kkc.cleanup_auth_files()
                             return
                         t_idx = int(t_input) - 1
                         if t_idx < 0 or t_idx >= len(tasks):
@@ -424,7 +231,7 @@ def main():
                     except (KeyboardInterrupt, EOFError):
                         print("\nExiting...")
                         browser.close()
-                        cleanup_auth_files()
+                        kkc.cleanup_auth_files()
                         return
 
                 try:
@@ -432,30 +239,13 @@ def main():
                 except (KeyboardInterrupt, EOFError):
                     print("\nExiting...")
                     browser.close()
-                    cleanup_auth_files()
+                    kkc.cleanup_auth_files()
                     return
 
-                # Safely escape strings for JS injection
-                remark_esc = js_safe(remark)
-                task_title_esc = js_safe(selected_task_title)
-
-                page.evaluate(f"""
-                    document.getElementById('date').value = '{kk_date}';
-                    document.getElementById('start_time').value = '{start_rounded}';
-                    document.getElementById('end_time').value = '{end_rounded}';
-                    document.getElementById('remark').value = '{remark_esc}';
-
-                    let taskOption = new Option('{task_title_esc}', '{selected_task_id}', true, true);
-                    $('#logTasks').append(taskOption).trigger('change');
-                    $('#logProjects').val('{selected_project}').trigger('change');
-                """)
-
-                page.locator("#submit_timesheet").click()
-                page.wait_for_timeout(1500)
+                kkc.fill_and_submit_timesheet_form(page, kk_date, start_rounded, end_rounded, remark, selected_project, selected_task_id, selected_task_title)
 
                 try:
-                    page.locator("#log_button").click()
-                    page.wait_for_timeout(3000)
+                    kkc.confirm_timesheet_log(page)
                     print(f"-> Logged entry {current_idx+1}/{len(chunked_blocks)} to KaryaKeeper.")
                 except Exception as e:
                     print(f"Failed to log entry {current_idx+1} to KaryaKeeper.", e)
@@ -473,7 +263,7 @@ def main():
             print(f"\nUnexpected error: {e}")
         finally:
             browser.close()
-            cleanup_auth_files()
+            kkc.cleanup_auth_files()
 
 if __name__ == "__main__":
     main()
