@@ -36,8 +36,9 @@ def fetch_in_out_time(domain, username, password, target_date):
             page.locator("input[type='password']").first.fill(password)
             page.keyboard.press("Enter")
 
-            # Wait for dashboard
-            page.wait_for_selector("text=Sign Out", timeout=20000)
+            # Wait for the post-login ESS portal URL; the dashboard does not always
+            # render a "Sign Out" text element, so waiting on text is unreliable
+            page.wait_for_url("**/portal/ess/**", timeout=60000)
             print("Login successful. Extracting internal employee ID...")
         except Exception as e:
             print("Failed to login or dashboard didn't load:", e)
