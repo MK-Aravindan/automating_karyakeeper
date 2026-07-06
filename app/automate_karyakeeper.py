@@ -335,7 +335,7 @@ def main():
                     try:
                         p_input = input("Select Project number (or '0' to edit time, 'q' to quit): ").strip()
                         if p_input.lower() == 'q':
-                            print("Exiting...")
+                            print("Exiting... Entries already logged have been saved.")
                             browser.close()
                             cleanup_auth_files()
                             return
@@ -409,7 +409,7 @@ def main():
                     try:
                         t_input = input("Select Task number (or 'q' to quit): ").strip()
                         if t_input.lower() == 'q':
-                            print("Exiting...")
+                            print("Exiting... Entries already logged have been saved.")
                             browser.close()
                             cleanup_auth_files()
                             return
@@ -452,18 +452,22 @@ def main():
 
                 page.locator("#submit_timesheet").click()
                 page.wait_for_timeout(1500)
-                print(f"-> Added block {current_idx+1} to timesheet list.")
+
+                try:
+                    page.locator("#log_button").click()
+                    page.wait_for_timeout(3000)
+                    print(f"-> Logged entry {current_idx+1}/{len(chunked_blocks)} to KaryaKeeper.")
+                except Exception as e:
+                    print(f"Failed to log entry {current_idx+1} to KaryaKeeper.", e)
 
                 current_idx += 1
 
-            # Confirm all
-            try:
-                print("\nSubmitting all entries to KaryaKeeper server...")
-                page.locator("#log_button").click()
-                page.wait_for_timeout(3000)
-                print("Successfully saved all timesheet entries!")
-            except Exception as e:
-                print("Failed to click final 'Log Entrie(s)' button.", e)
+                # Reload a fresh entry form for the next block
+                if current_idx < len(chunked_blocks):
+                    page.goto(kk_url.rstrip('/') + "/timesheet?action=create")
+                    page.wait_for_load_state("networkidle")
+
+            print("\nAll entries have been processed.")
 
         except Exception as e:
             print(f"\nUnexpected error: {e}")

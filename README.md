@@ -24,8 +24,8 @@ This tool automates the process of logging your daily timesheets into KaryaKeepe
 4. It will then prompt you to select the Project and Task you worked on for any unlogged time blocks. 
 5. Type the corresponding number for the Project/Task, provide a short description, and press Enter.
    - **Editing Time**: If you worked on multiple projects within a single block, type **`0`** when prompted for the Project number. You can then adjust the start and end times for that block. Any leftover time you trim off will automatically be converted into a new block for you to log next!
-   - **Skipping**: If you want to skip logging a particular block or stop early, you can type **`q`** to quit the automation cleanly at any time.
-6. The script will automatically inject your answers and submit the timesheet!
+   - **Skipping**: If you want to stop early, you can type **`q`** to quit the automation cleanly at any time. Entries you have already logged before quitting remain saved in KaryaKeeper.
+6. Each entry is submitted to KaryaKeeper immediately after you fill it in, so your time is logged one entry at a time.
 
 ## Troubleshooting
 - **`Error: Unable to update lock within the stale threshold ... __dirlock`** during setup: this happened in older versions because the browser was downloaded into the project folder, and OneDrive sync corrupted the download lock. Pull the latest version of this tool and re-run `setup.bat` — it now downloads outside OneDrive and cleans up the old broken folder automatically.
