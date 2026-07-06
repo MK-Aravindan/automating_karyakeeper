@@ -1,6 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Change working directory to the directory of the batch file
+cd /d "%~dp0"
+
 echo ===================================================
 echo KaryaKeeper Automation - Setup
 echo ===================================================

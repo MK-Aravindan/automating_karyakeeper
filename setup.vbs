@@ -1,3 +1,11 @@
+Set objFSO = CreateObject("Scripting.FileSystemObject")
 Set objShell = CreateObject("WScript.Shell")
-' Run setup.bat in a visible command prompt window
-objShell.Run "cmd.exe /c setup.bat", 1, True
+
+' Get the exact folder where this VBS script is located
+strScriptFolder = objFSO.GetParentFolderName(WScript.ScriptFullName)
+
+' Change the working directory to that folder to prevent System32 errors
+objShell.CurrentDirectory = strScriptFolder
+
+' Run setup.bat reliably from its absolute path
+objShell.Run "cmd.exe /c """ & strScriptFolder & "\setup.bat""", 1, True
