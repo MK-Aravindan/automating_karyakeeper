@@ -17,7 +17,7 @@ def round_dt_15_mins(dt):
     if not dt:
         return None
     minute = (dt.minute // 15) * 15
-    if dt.minute % 15 > 7:
+    if dt.minute % 15 > 10:
         minute += 15
     dt_rounded = dt.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=minute)
     return dt_rounded
