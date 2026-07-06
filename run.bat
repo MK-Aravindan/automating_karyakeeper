@@ -4,6 +4,12 @@ setlocal
 :: Change working directory to the directory of the batch file
 cd /d "%~dp0"
 
+:: Keep credentials and saved progress outside the OneDrive-backed project.
+set KARYAKEEPER_DATA_DIR=%USERPROFILE%\.karyakeeper
+set KARYAKEEPER_CONFIG_FILE=%KARYAKEEPER_DATA_DIR%\.env
+IF NOT EXIST "%KARYAKEEPER_DATA_DIR%" mkdir "%KARYAKEEPER_DATA_DIR%"
+IF EXIST ".env" IF NOT EXIST "%KARYAKEEPER_CONFIG_FILE%" move /Y ".env" "%KARYAKEEPER_CONFIG_FILE%" >nul
+
 echo ===================================================
 echo KaryaKeeper Automation - Runner
 echo ===================================================
@@ -31,8 +37,8 @@ IF NOT EXIST "%PLAYWRIGHT_BROWSERS_PATH%" (
     exit /b 1
 )
 
-IF NOT EXIST ".env" (
-    echo ERROR: .env file is missing!
+IF NOT EXIST "%KARYAKEEPER_CONFIG_FILE%" (
+    echo ERROR: The local configuration file is missing!
     echo Please run setup.bat first to configure the application.
     pause
     exit /b 1
@@ -48,12 +54,21 @@ IF NOT EXIST "%USERPROFILE%\.streamlit\credentials.toml" (
     ) > "%USERPROFILE%\.streamlit\credentials.toml"
 )
 
+:: Clear any sign-in session files left behind by older versions or crashes.
+:: The app itself keeps sessions in memory only and never writes them to disk.
+if exist "auth.json" del /q "auth.json" >nul 2>&1
+if exist "kk_auth.json" del /q "kk_auth.json" >nul 2>&1
+
 echo.
 echo Starting KaryaKeeper Automation web app...
 echo A browser tab will open automatically. Close this window to stop the app.
+echo Your sign-in sessions are cleared automatically when the app stops.
 echo.
 
-%PY_CMD% -m streamlit run app\streamlit_app.py
+%PY_CMD% -m streamlit run app\streamlit_app.py --server.address 127.0.0.1
+
+if exist "auth.json" del /q "auth.json" >nul 2>&1
+if exist "kk_auth.json" del /q "kk_auth.json" >nul 2>&1
 
 echo.
 pause

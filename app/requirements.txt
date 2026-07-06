@@ -1,4 +1,4 @@
-python-dotenv
-playwright
-tzdata
-streamlit
+python-dotenv==1.2.1
+playwright==1.56.0
+tzdata==2025.3
+streamlit==1.44.0

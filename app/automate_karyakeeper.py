@@ -14,7 +14,8 @@ ROOT_DIR = kkc.ROOT_DIR
 
 
 def main():
-    load_dotenv(os.path.join(ROOT_DIR, ".env"))
+    kkc.ensure_local_storage()
+    load_dotenv(kkc.CONFIG_FILE)
 
     gt_domain = os.getenv("GREYTHR_DOMAIN")
     gt_user = os.getenv("GREYTHR_USERNAME")
@@ -71,11 +72,7 @@ def main():
         browser = p.chromium.launch(headless=True)
 
         try:
-            if os.path.exists(kkc.KK_AUTH_PATH):
-                context = browser.new_context(storage_state=kkc.KK_AUTH_PATH)
-            else:
-                context = browser.new_context()
-
+            context = browser.new_context()
             page = context.new_page()
 
             try:
@@ -254,8 +251,12 @@ def main():
 
                 # Reload a fresh entry form for the next block
                 if current_idx < len(chunked_blocks):
-                    page.goto(kk_url.rstrip('/') + "/timesheet?action=create")
-                    page.wait_for_load_state("networkidle")
+                    page.goto(
+                        kk_url.rstrip('/') + "/timesheet?action=create",
+                        wait_until="domcontentloaded",
+                        timeout=30000,
+                    )
+                    page.wait_for_selector("#logProjects option", state="attached", timeout=30000)
 
             print("\nAll entries have been processed.")
 

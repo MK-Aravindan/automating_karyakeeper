@@ -3,6 +3,10 @@ gatherUsageStats = false
 
 [server]
 headless = false
+address = "127.0.0.1"
 
 [client]
 toolbarMode = "minimal"
+
+[theme]
+primaryColor = "#2563EB"

@@ -4,6 +4,11 @@ setlocal
 :: Change working directory to the directory of the batch file
 cd /d "%~dp0"
 
+:: Keep credentials and saved progress outside the OneDrive-backed project.
+set KARYAKEEPER_DATA_DIR=%USERPROFILE%\.karyakeeper
+set KARYAKEEPER_CONFIG_FILE=%KARYAKEEPER_DATA_DIR%\.env
+IF NOT EXIST "%KARYAKEEPER_DATA_DIR%" mkdir "%KARYAKEEPER_DATA_DIR%"
+
 echo ===================================================
 echo KaryaKeeper Automation - Setup
 echo ===================================================
@@ -86,9 +91,13 @@ exit /b 1
 echo Playwright installed successfully.
 echo.
 
-:: 4. Configure .env File
+:: 4. Configure the local .env File
 echo [4/4] Checking configuration file...
-IF NOT EXIST ".env" (
+IF EXIST ".env" IF NOT EXIST "%KARYAKEEPER_CONFIG_FILE%" (
+    echo Moving the existing configuration out of the OneDrive project folder...
+    move /Y ".env" "%KARYAKEEPER_CONFIG_FILE%" >nul
+)
+IF NOT EXIST "%KARYAKEEPER_CONFIG_FILE%" (
     echo Creating .env file template...
     (
         echo GREYTHR_DOMAIN=7dxperts
@@ -97,13 +106,13 @@ IF NOT EXIST ".env" (
         echo KARYAKEEPER_URL=https://app.karyakeeper.com/
         echo KARYAKEEPER_USERNAME=
         echo KARYAKEEPER_PASSWORD=
-    ) > .env
+    ) > "%KARYAKEEPER_CONFIG_FILE%"
     echo.
-    echo A new .env file has been created.
+    echo A new local configuration file has been created.
     echo Opening .env file in Notepad for you to configure...
-    start notepad .env
+    start "" notepad "%KARYAKEEPER_CONFIG_FILE%"
 ) ELSE (
-    echo .env file already exists.
+    echo Local configuration already exists.
 )
 
 echo.

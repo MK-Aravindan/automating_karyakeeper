@@ -1,12 +1,133 @@
 import os
 import re
+import json
+import shutil
+import tempfile
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # Resolve paths relative to THIS script's location, not the working directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
-KK_AUTH_PATH = os.path.join(ROOT_DIR, "kk_auth.json")
+LEGACY_DATA_DIR = os.path.join(ROOT_DIR, "app_data")
+
+
+def _default_data_dir():
+    override = os.getenv("KARYAKEEPER_DATA_DIR")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    if os.name == "nt":
+        return os.path.join(os.getenv("USERPROFILE", os.path.expanduser("~")), ".karyakeeper")
+    return os.path.join(os.path.expanduser("~"), ".karyakeeper")
+
+
+DATA_DIR = _default_data_dir()
+CONFIG_FILE = os.path.abspath(os.path.expanduser(
+    os.getenv("KARYAKEEPER_CONFIG_FILE", os.path.join(DATA_DIR, ".env"))
+))
+STATE_FILE = os.path.join(DATA_DIR, "state.json")
+
+
+class IncompleteHistoricalAttendanceError(ValueError):
+    """Raised when an old attendance day has an IN punch without an OUT punch."""
+
+
+class StateStoreError(RuntimeError):
+    """Raised when saved local state cannot be read or safely written."""
+
+
+def _move_local_file(source, destination):
+    """Move a legacy local file after ensuring the destination is durable."""
+    if not source or not os.path.exists(source) or os.path.abspath(source) == os.path.abspath(destination):
+        return False
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    if os.path.exists(destination):
+        try:
+            with open(source, "rb") as src, open(destination, "rb") as dst:
+                if src.read() == dst.read():
+                    os.remove(source)
+        except OSError:
+            pass
+        return False
+    try:
+        os.replace(source, destination)
+    except OSError:
+        shutil.copy2(source, destination)
+        with open(source, "rb") as src, open(destination, "rb") as dst:
+            if src.read() != dst.read():
+                raise StateStoreError(f"Could not verify migration from {source} to {destination}.")
+        os.remove(source)
+    return True
+
+
+def ensure_local_storage():
+    """Keep credentials and progress out of the OneDrive-backed project folder."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    migrated = []
+    prior_local_dir = (
+        os.path.join(os.environ["LOCALAPPDATA"], "KaryaKeeper")
+        if os.getenv("LOCALAPPDATA")
+        else None
+    )
+    candidates = [
+        (os.path.join(ROOT_DIR, ".env"), CONFIG_FILE, "configuration"),
+        (os.path.join(LEGACY_DATA_DIR, "state.json"), STATE_FILE, "timesheet progress"),
+        (os.path.join(ROOT_DIR, ".streamlit_state.json"), STATE_FILE, "legacy timesheet progress"),
+    ]
+    if prior_local_dir:
+        candidates.extend([
+            (os.path.join(prior_local_dir, ".env"), CONFIG_FILE, "configuration"),
+            (os.path.join(prior_local_dir, "state.json"), STATE_FILE, "timesheet progress"),
+        ])
+    for source, destination, label in candidates:
+        if _move_local_file(source, destination):
+            migrated.append(label)
+    return migrated
+
+
+def load_json_with_backup(path):
+    """Load JSON and recover from the last backup instead of silently discarding data."""
+    if not os.path.exists(path):
+        return {}, False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f), False
+    except (OSError, json.JSONDecodeError, UnicodeError) as primary_error:
+        backup = path + ".bak"
+        try:
+            with open(backup, "r", encoding="utf-8") as f:
+                return json.load(f), True
+        except (OSError, json.JSONDecodeError, UnicodeError) as backup_error:
+            raise StateStoreError(
+                f"Saved progress is unreadable ({primary_error}). Backup recovery also failed ({backup_error})."
+            ) from primary_error
+
+
+def atomic_write_json(path, data):
+    """Durably replace a JSON file while retaining its previous valid version."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix="state-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as current:
+                    json.load(current)
+                shutil.copy2(path, path + ".bak")
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                # Preserve the existing valid backup when the primary is corrupt.
+                pass
+        os.replace(temp_path, path)
+    except Exception as error:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise StateStoreError(f"Could not save progress safely: {error}") from error
 
 
 def round_dt_15_mins(dt):
@@ -17,6 +138,15 @@ def round_dt_15_mins(dt):
         minute += 15
     dt_rounded = dt.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=minute)
     return dt_rounded
+
+
+def floor_dt_15_mins(dt):
+    return dt.replace(minute=(dt.minute // 15) * 15, second=0, microsecond=0)
+
+
+def ceil_dt_15_mins(dt):
+    floored = floor_dt_15_mins(dt)
+    return floored if dt == floored else floored + timedelta(minutes=15)
 
 
 def parse_punch_dt(dt_str):
@@ -82,17 +212,25 @@ def consolidate_blocks(swipes):
 
 
 def filter_existing_blocks(blocks, existing_times, target_date):
-    covered_segments = set()
+    """Subtract existing continuous intervals and return safe 15-minute blocks.
+
+    Any partial 15-minute segment touched by an existing entry is excluded. This
+    intentionally favours avoiding a duplicate log over filling a sub-15-minute gap.
+    """
+    target_day = datetime.strptime(target_date, "%Y-%m-%d").date()
+    today_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    covered_intervals = []
     for s_str, e_str in existing_times:
         try:
             s_time = datetime.strptime(f"{target_date} {s_str}", "%Y-%m-%d %H:%M")
             e_time = datetime.strptime(f"{target_date} {e_str}", "%Y-%m-%d %H:%M")
-            curr = s_time
-            while curr < e_time:
-                covered_segments.add(curr)
-                curr += timedelta(minutes=15)
-        except Exception:
-            pass
+            if e_time <= s_time:
+                e_time += timedelta(days=1)
+            covered_intervals.append((s_time, e_time))
+        except (TypeError, ValueError):
+            continue
+
+    covered_intervals.sort(key=lambda interval: interval[0])
 
     filtered_blocks = []
 
@@ -102,6 +240,11 @@ def filter_existing_blocks(blocks, existing_times, target_date):
             end_r = round_dt_15_mins(end_dt)
             is_running = False
         else:
+            if target_day != today_ist:
+                raise IncompleteHistoricalAttendanceError(
+                    f"Attendance for {target_date} has an IN punch at {start_dt.strftime('%H:%M')} "
+                    "without a matching OUT punch. Enter the missing OUT punch in GreytHR or use a manual entry."
+                )
             now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
             end_r = round_dt_15_mins(now_ist)
             is_running = True
@@ -109,31 +252,28 @@ def filter_existing_blocks(blocks, existing_times, target_date):
         if end_r <= start_r:
             end_r = start_r + timedelta(minutes=15)
 
-        uncovered = []
-        curr = start_r
-        while curr < end_r:
-            if curr not in covered_segments:
-                uncovered.append(curr)
-            curr += timedelta(minutes=15)
+        residuals = [(start_r, end_r)]
+        for covered_start, covered_end in covered_intervals:
+            next_residuals = []
+            for residual_start, residual_end in residuals:
+                if covered_end <= residual_start or covered_start >= residual_end:
+                    next_residuals.append((residual_start, residual_end))
+                    continue
+                if covered_start > residual_start:
+                    next_residuals.append((residual_start, covered_start))
+                if covered_end < residual_end:
+                    next_residuals.append((covered_end, residual_end))
+            residuals = next_residuals
+            if not residuals:
+                break
 
-        if not uncovered:
-            continue
-
-        uncovered.sort()
-        curr_start = uncovered[0]
-        prev = uncovered[0]
-
-        for seg in uncovered[1:]:
-            if seg == prev + timedelta(minutes=15):
-                prev = seg
-            else:
-                filtered_blocks.append((curr_start, prev + timedelta(minutes=15), False))
-                curr_start = seg
-                prev = seg
-
-        final_end = prev + timedelta(minutes=15)
-        running_flag = is_running if final_end == end_r else False
-        filtered_blocks.append((curr_start, final_end, running_flag))
+        for residual_start, residual_end in residuals:
+            safe_start = ceil_dt_15_mins(residual_start)
+            safe_end = floor_dt_15_mins(residual_end)
+            if safe_end - safe_start < timedelta(minutes=15):
+                continue
+            running_flag = is_running and safe_end == end_r
+            filtered_blocks.append((safe_start, safe_end, running_flag))
 
     return filtered_blocks
 
@@ -156,6 +296,50 @@ def process_and_chunk_blocks(filtered_blocks):
     return chunked
 
 
+def parse_clock_interval(target_date, start_time, end_time):
+    start = datetime.strptime(f"{target_date} {start_time}", "%Y-%m-%d %H:%M")
+    end = datetime.strptime(f"{target_date} {end_time}", "%Y-%m-%d %H:%M")
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
+
+
+def intervals_overlap(first_start, first_end, second_start, second_end):
+    return first_start < second_end and second_start < first_end
+
+
+def find_interval_conflict(target_date, start_time, end_time, intervals):
+    candidate_start, candidate_end = parse_clock_interval(target_date, start_time, end_time)
+    for label, other_start, other_end in intervals:
+        try:
+            parsed_start, parsed_end = parse_clock_interval(target_date, other_start, other_end)
+        except (TypeError, ValueError):
+            continue
+        if intervals_overlap(candidate_start, candidate_end, parsed_start, parsed_end):
+            return label
+    return None
+
+
+def total_interval_minutes(target_date, intervals):
+    """Return union duration so overlapping rows are never double-counted in summaries."""
+    parsed = []
+    for start_time, end_time in intervals:
+        try:
+            parsed.append(parse_clock_interval(target_date, start_time, end_time))
+        except (TypeError, ValueError):
+            continue
+    if not parsed:
+        return 0
+    parsed.sort(key=lambda interval: interval[0])
+    merged = [list(parsed[0])]
+    for start, end in parsed[1:]:
+        if start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return int(sum((end - start).total_seconds() for start, end in merged) // 60)
+
+
 def cleanup_auth_files():
     """Remove session files from the root project directory."""
     for f in ["auth.json", "kk_auth.json"]:
@@ -176,28 +360,24 @@ def validate_date(date_str):
         return False
 
 
-def js_safe(s):
-    """Escape a string safely for inline JS single-quote context."""
-    return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", "")
-
-
 def login_karyakeeper(context, page, kk_url, kk_user, kk_pass):
-    """Logs into KaryaKeeper, reusing an existing session if the page already loads the Dashboard.
-    Raises on failure. Saves a fresh session to KK_AUTH_PATH on a successful new login."""
+    """Logs into KaryaKeeper, reusing the context's session if the page already
+    shows the Dashboard. Raises on failure. The session lives only in browser
+    memory — nothing is written to disk."""
     page.goto(kk_url, timeout=30000)
 
-    try:
-        page.wait_for_selector("text=Dashboard", timeout=5000)
+    # Wait for whichever appears first instead of burning a fixed 5s probe
+    dashboard = page.locator("text=Dashboard").first
+    login_box = page.locator("#login-email, input[name='email']").first
+    dashboard.or_(login_box).first.wait_for(state="visible", timeout=30000)
+    if dashboard.is_visible():
         return
-    except Exception:
-        pass
 
-    page.locator("#login-email, input[name='email']").first.fill(kk_user)
+    login_box.fill(kk_user)
     page.locator("#login-password, input[name='password']").first.fill(kk_pass)
     page.keyboard.press("Enter")
 
     page.wait_for_selector("text=Dashboard", timeout=30000)
-    context.storage_state(path=KK_AUTH_PATH)
 
 
 def parse_logged_description(desc):
@@ -213,8 +393,12 @@ def fetch_existing_entries_detailed(page, kk_url, target_date):
     """Returns dicts for entries already logged on target_date, with keys
     project, task, remark, start, end. Table columns are:
     Project, Who, Description, Task Group, Start, End, Billable, Time, Action."""
-    page.goto(kk_url.rstrip('/') + "/timesheet")
-    page.wait_for_load_state("networkidle")
+    page.goto(kk_url.rstrip('/') + "/timesheet", wait_until="load", timeout=30000)
+
+    # A logged-out session lands on the login page whose empty body would silently
+    # read as "no entries", risking double-logging — fail loudly instead
+    if page.locator("#login-email, input[name='email']").count():
+        raise RuntimeError("KaryaKeeper session expired.")
 
     target_date_str = datetime.strptime(target_date, "%Y-%m-%d").strftime("%d %B %Y")
 
@@ -254,18 +438,31 @@ def fetch_existing_entries(page, kk_url, target_date):
     return [(e["start"], e["end"]) for e in fetch_existing_entries_detailed(page, kk_url, target_date)]
 
 
+OPTIONS_JS = "els => els.map(e => ({text: e.innerText.trim(), value: e.value})).filter(e => e.value)"
+
+
 def fetch_projects(page, kk_url):
     """Navigates to the timesheet creation form and returns the available projects."""
-    page.goto(kk_url.rstrip('/') + "/timesheet?action=create")
-    page.wait_for_load_state("networkidle")
-    return page.locator("#logProjects option").evaluate_all(
-        "els => els.map(e => ({text: e.innerText.trim(), value: e.value})).filter(e => e.value)"
-    )
+    page.goto(kk_url.rstrip('/') + "/timesheet?action=create", wait_until="domcontentloaded", timeout=30000)
+    # select2 hides the raw <select>, so wait for attachment, not visibility
+    page.wait_for_selector("#logProjects option", state="attached", timeout=30000)
+    projects = page.locator("#logProjects option").evaluate_all(OPTIONS_JS)
+    if not projects:
+        page.wait_for_function(
+            "document.querySelectorAll('#logProjects option[value]:not([value=\"\"])').length > 0",
+            timeout=10000,
+        )
+        projects = page.locator("#logProjects option").evaluate_all(OPTIONS_JS)
+    return projects
 
 
 def fetch_tasks(page, kk_url, project_id):
     """Returns the list of tasks for the given project id. Raises on a non-OK response."""
-    res = page.request.get(f"{kk_url.rstrip('/')}/project/timesheet/task?projectId={project_id}")
+    res = page.request.get(
+        f"{kk_url.rstrip('/')}/project/timesheet/task",
+        params={"projectId": str(project_id)},
+        timeout=30000,
+    )
     if not res.ok:
         raise RuntimeError(f"Failed to fetch tasks (HTTP {res.status}).")
     return res.json().get("results", [])
@@ -274,25 +471,45 @@ def fetch_tasks(page, kk_url, project_id):
 def fill_and_submit_timesheet_form(page, kk_date, start_time, end_time, remark, project_id, task_id, task_title):
     """Fills the timesheet creation form and clicks the initial submit button. The page
     must already be on the '/timesheet?action=create' form before calling this."""
-    remark_esc = js_safe(remark)
-    task_title_esc = js_safe(task_title)
+    page.evaluate(
+        """
+        values => {
+            const setValue = (id, value) => {
+                const element = document.getElementById(id);
+                if (!element) throw new Error(`Missing form field: ${id}`);
+                element.value = value;
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+            };
+            setValue('date', values.date);
+            setValue('start_time', values.start);
+            setValue('end_time', values.end);
+            setValue('remark', values.remark);
 
-    page.evaluate(f"""
-        document.getElementById('date').value = '{kk_date}';
-        document.getElementById('start_time').value = '{start_time}';
-        document.getElementById('end_time').value = '{end_time}';
-        document.getElementById('remark').value = '{remark_esc}';
-
-        let taskOption = new Option('{task_title_esc}', '{task_id}', true, true);
-        $('#logTasks').append(taskOption).trigger('change');
-        $('#logProjects').val('{project_id}').trigger('change');
-    """)
+            const taskOption = new Option(values.taskTitle, String(values.taskId), true, true);
+            $('#logTasks').append(taskOption).trigger('change');
+            $('#logProjects').val(String(values.projectId)).trigger('change');
+        }
+        """,
+        {
+            "date": kk_date,
+            "start": start_time,
+            "end": end_time,
+            "remark": remark,
+            "projectId": project_id,
+            "taskId": task_id,
+            "taskTitle": task_title,
+        },
+    )
 
     page.locator("#submit_timesheet").click()
-    page.wait_for_timeout(1500)
+    # Wait for the confirmation dialog instead of sleeping a fixed 1.5s
+    page.locator("#log_button").wait_for(state="visible", timeout=20000)
 
 
 def confirm_timesheet_log(page):
     """Clicks the final confirmation button that actually commits the entry."""
-    page.locator("#log_button").click()
-    page.wait_for_timeout(3000)
+    confirm = page.locator("#log_button")
+    confirm.click()
+    confirm.wait_for(state="hidden", timeout=30000)
+    return True

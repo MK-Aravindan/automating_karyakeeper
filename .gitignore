@@ -7,6 +7,7 @@ kk_auth.json
 
 # Streamlit app's saved timesheet progress (local to each machine)
 .streamlit_state.json
+app_data/
 
 # Python
 __pycache__/
@@ -18,3 +19,7 @@ __pycache__/
 
 # Local Playwright browser binaries (downloaded by setup.bat)
 .browsers/
+
+# Local Playwright MCP evidence
+.playwright-mcp/
+karyakeeper-*.png
