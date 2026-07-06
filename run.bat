@@ -23,6 +23,8 @@ echo.
 echo Starting automation...
 echo.
 
+set PLAYWRIGHT_BROWSERS_PATH=0
+
 if "%target_date%"=="" (
     python app\automate_karyakeeper.py
 ) else (
