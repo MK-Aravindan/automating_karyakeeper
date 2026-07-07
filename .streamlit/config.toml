@@ -4,6 +4,9 @@ gatherUsageStats = false
 [server]
 headless = false
 address = "127.0.0.1"
+# The project lives in OneDrive, whose sync locks files mid-read and crashes the
+# auto-reload watcher (PermissionError in watchdog). End users don't need hot reload.
+fileWatcherType = "none"
 
 [client]
 toolbarMode = "minimal"

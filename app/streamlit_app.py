@@ -22,18 +22,35 @@ from browser_worker import BrowserWorker
 ROOT_DIR = kkc.ROOT_DIR
 DATA_DIR = kkc.DATA_DIR
 STATE_FILE = kkc.STATE_FILE
-DATE_KEYS = ("entries", "projects", "tasks_cache", "sessions", "existing_entries")
+DATE_KEYS = ("entries", "projects", "tasks_cache", "sessions", "existing_entries", "fetched_at")
 STORE_LOCK = threading.RLock()
 
 st.set_page_config(page_title="KaryaKeeper Automation", page_icon="🗓️", layout="wide")
 
 st.markdown("""
 <style>
-.block-container {max-width: 1250px; padding-top: 2.2rem; margin: auto;}
+.block-container {max-width: 100%; padding-top: 2.2rem; margin: auto;}
 .stButton button {border-radius: 8px;}
 .stButton button p {white-space: normal; overflow-wrap: break-word;}
+/* The top region (controls, fetch status, summary) is only a positioning marker; hide
+   its own layout box. On narrow screens its column row stacks full-width, mirroring
+   the attendance block's behaviour below. */
+[data-testid="stElementContainer"]:has(.top-region) {display: none;}
+@media (max-width: 1150px) {
+  [data-testid="stHorizontalBlock"]:has(.top-region) {flex-direction: column;}
+  [data-testid="stHorizontalBlock"]:has(.top-region) > [data-testid="stColumn"] {width: 100% !important; flex: 1 1 100% !important;}
+}
+/* Full-page loading feedback: while a script run is in progress, blur the page and show
+   a centered spinner instead of Streamlit's bare dimming. Delayed ~0.6s so quick reruns
+   never flash, and suppressed while a LIVE status panel or inline spinner is giving more
+   detailed progress (a finished, collapsed status panel must not suppress it). */
+[data-testid="stApp"]::before {content: ""; position: fixed; inset: 0; z-index: 99990; background: rgba(128,128,128,0.12); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.15s ease, visibility 0s linear 0.15s;}
+[data-testid="stApp"]::after {content: ""; position: fixed; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; z-index: 99991; border: 4px solid rgba(128,128,128,0.35); border-top-color: #ff4b4b; border-radius: 50%; animation: kk-spin 0.8s linear infinite; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.15s ease, visibility 0s linear 0.15s;}
+[data-testid="stApp"][data-test-script-state="running"]:not(:has([data-testid="stExpanderIconSpinner"], [data-testid="stSpinner"]))::before,
+[data-testid="stApp"][data-test-script-state="running"]:not(:has([data-testid="stExpanderIconSpinner"], [data-testid="stSpinner"]))::after {opacity: 1; visibility: visible; transition-delay: 0.45s;}
+@keyframes kk-spin {to {transform: rotate(360deg);}}
 h1 {letter-spacing: -0.3px;}
-.kk-summary {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1rem; margin:0.75rem 0 1.25rem;}
+.kk-summary {display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; margin:0.75rem 0 1.25rem;}
 .kk-summary > div {min-width:0;}
 /* Inherit theme colors so the summary stays readable in dark mode too */
 .kk-summary dt {font-size:0.875rem; opacity:0.65; margin-bottom:0.15rem;}
@@ -146,6 +163,7 @@ def clear_all_row_widget_keys():
 def blank_working_state():
     for k in DATE_KEYS:
         st.session_state[k] = {} if k == "tasks_cache" else []
+    st.session_state["fetched_at"] = None
     st.session_state["target_date"] = None
 
 
@@ -213,19 +231,8 @@ def switch_to_date(date_str):
     st.session_state["tasks_cache"] = {k: v for k, v in (saved.get("tasks_cache") or {}).items() if v}
     st.session_state["sessions"] = normalize_sessions(saved.get("sessions") or [])
     st.session_state["existing_entries"] = saved.get("existing_entries") or []
+    st.session_state["fetched_at"] = saved.get("fetched_at")
     st.session_state["target_date"] = date_str
-
-
-def reset_state():
-    """Discard only the currently viewed date's saved data, keeping other dates."""
-    td = st.session_state.get("target_date") or st.session_state.get("picker_date")
-    if td:
-        store = load_store()
-        if td in store:
-            del store[td]
-            save_store(store)
-    clear_all_row_widget_keys()
-    blank_working_state()
 
 
 if "initialized" not in st.session_state:
@@ -320,6 +327,7 @@ def do_fetch_attendance(target_date):
         st.session_state["tasks_cache"] = {}
         st.session_state["sessions"] = build_session_rows(swipes)
         st.session_state["existing_entries"] = existing_entries
+        st.session_state["fetched_at"] = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M")
         clear_all_row_widget_keys()
         st.session_state["last_fetch_seconds"] = round(time.perf_counter() - started, 2)
         save_state()
@@ -717,110 +725,78 @@ if st.session_state.get("store_warning"):
 
 today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
 
-with st.container(border=True):
-    ctrl = st.columns([2.4, 2.0, 1.8, 3.8], vertical_alignment="bottom")
-    with ctrl[0]:
-        date_input = st.date_input("Date to log", value=today, max_value=today)
-    picked_str = date_input.strftime("%Y-%m-%d")
-    if st.session_state.get("picker_date") != picked_str:
-        st.session_state["picker_date"] = picked_str
-        switch_to_date(picked_str)
+# The controls, fetch status, and summary live in a column row with the same split as
+# the content area below, so the whole left side shares one width and resizes together.
+top = st.columns([2.4, 1], gap="large")
+with top[0]:
+    st.markdown('<div class="top-region"></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        ctrl = st.columns([2.4, 2.0, 3.0], vertical_alignment="bottom")
+        with ctrl[0]:
+            date_input = st.date_input("Date to log", value=today, max_value=today)
+        picked_str = date_input.strftime("%Y-%m-%d")
+        if st.session_state.get("picker_date") != picked_str:
+            st.session_state["picker_date"] = picked_str
+            switch_to_date(picked_str)
 
-    has_loaded_date = st.session_state.get("target_date") == picked_str
-    with ctrl[1]:
-        fetch_clicked = st.button(
-            "🔄 Refresh attendance" if has_loaded_date else "🔍 Fetch attendance",
-            type="primary",
-            use_container_width=True,
-        )
-    with ctrl[2]:
-        clear_clicked = st.button(
-            "Clear local draft",
-            disabled=not has_loaded_date,
-            use_container_width=True,
+        has_loaded_date = st.session_state.get("target_date") == picked_str
+        with ctrl[1]:
+            fetch_clicked = st.button(
+                "🔄 Refresh attendance" if has_loaded_date else "🔍 Fetch attendance",
+                type="primary",
+                use_container_width=True,
+                help="Discards the local draft and reloads everything fresh from GreytHR and KaryaKeeper.",
+            )
+
+        st.caption(
+            "🔒 Credentials and progress are stored in your private local application folder. "
+            "Browser sign-in sessions remain in memory only."
         )
 
-    st.caption(
-        "🔒 Credentials and progress are stored in your private local application folder. "
-        "Browser sign-in sessions remain in memory only."
+    # Refresh discards the local draft and rebuilds everything from fresh data; the
+    # first page load after starting the app does the same automatically so nothing
+    # stale is shown. If the fetch fails, the previous data stays on screen instead.
+    if fetch_clicked or not st.session_state.get("auto_fetch_done"):
+        st.session_state["auto_fetch_done"] = True
+        do_fetch_attendance(picked_str)
+
+    target_date = st.session_state.get("target_date")
+
+    if not target_date:
+        nice_picked = datetime.strptime(picked_str, "%Y-%m-%d").strftime("%A, %d %B %Y")
+        st.info(f"No timesheet data loaded for **{nice_picked}**. Select **Fetch attendance** to begin.")
+        st.stop()
+
+    nice_date = datetime.strptime(target_date, "%Y-%m-%d").strftime("%A, %d %B %Y")
+    sessions = st.session_state.get("sessions") or []
+    existing_entries = st.session_state.get("existing_entries") or []
+    entries = st.session_state.get("entries", [])
+
+    worked_minutes = sum(s["minutes"] if s["minutes"] is not None else (s.get("elapsed") or 0) for s in sessions)
+    logged_minutes = kkc.total_interval_minutes(
+        target_date,
+        [(entry["start"], entry["end"]) for entry in existing_entries],
     )
+    remaining_minutes = kkc.total_interval_minutes(
+        target_date,
+        [
+            (entry["start"], entry["end"])
+            for entry in entries
+            if not entry.get("saved") and not entry.get("skipped")
+        ],
+    )
+    processed_count = sum(bool(e.get("saved") or e.get("skipped")) for e in entries)
 
-    if fetch_clicked:
-        if has_loaded_date and st.session_state.get("entries"):
-            st.session_state["confirm_refresh"] = True
-        else:
-            do_fetch_attendance(picked_str)
-    if clear_clicked:
-        st.session_state["confirm_clear"] = True
-
-    if st.session_state.get("confirm_refresh"):
-        st.warning("Refreshing replaces the current unsaved rows after the new data loads successfully.")
-        confirm_cols = st.columns([2, 2, 6])
-        refresh_now = False
-        with confirm_cols[0]:
-            if st.button("Refresh now", type="primary", use_container_width=True):
-                st.session_state.pop("confirm_refresh", None)
-                refresh_now = True
-        with confirm_cols[1]:
-            if st.button("Cancel", key="cancel_refresh", use_container_width=True):
-                st.session_state.pop("confirm_refresh", None)
-                st.rerun()
-        # Run the fetch at container level so its status panel is not squeezed
-        # into the narrow confirmation column
-        if refresh_now:
-            do_fetch_attendance(picked_str)
-
-    if st.session_state.get("confirm_clear"):
-        st.warning("Clear only this date's local draft? Entries already saved in KaryaKeeper are not deleted.")
-        clear_cols = st.columns([2, 2, 6])
-        with clear_cols[0]:
-            if st.button("Clear this date", type="primary", use_container_width=True):
-                st.session_state.pop("confirm_clear", None)
-                reset_state()
-                st.rerun()
-        with clear_cols[1]:
-            if st.button("Keep draft", use_container_width=True):
-                st.session_state.pop("confirm_clear", None)
-                st.rerun()
-
-target_date = st.session_state.get("target_date")
-
-if not target_date:
-    nice_picked = datetime.strptime(picked_str, "%Y-%m-%d").strftime("%A, %d %B %Y")
-    st.info(f"No timesheet data loaded for **{nice_picked}**. Select **Fetch attendance** to begin.")
-    st.stop()
-
-nice_date = datetime.strptime(target_date, "%Y-%m-%d").strftime("%A, %d %B %Y")
-sessions = st.session_state.get("sessions") or []
-existing_entries = st.session_state.get("existing_entries") or []
-entries = st.session_state.get("entries", [])
-
-worked_minutes = sum(s["minutes"] if s["minutes"] is not None else (s.get("elapsed") or 0) for s in sessions)
-logged_minutes = kkc.total_interval_minutes(
-    target_date,
-    [(entry["start"], entry["end"]) for entry in existing_entries],
-)
-remaining_minutes = kkc.total_interval_minutes(
-    target_date,
-    [
-        (entry["start"], entry["end"])
-        for entry in entries
-        if not entry.get("saved") and not entry.get("skipped")
-    ],
-)
-processed_count = sum(bool(e.get("saved") or e.get("skipped")) for e in entries)
-
-st.markdown(
-    f"""
-    <dl class="kk-summary">
-      <div><dt>Attendance</dt><dd>{fmt_minutes(worked_minutes) if worked_minutes else '—'}</dd></div>
-      <div><dt>Already logged</dt><dd>{fmt_minutes(logged_minutes) if logged_minutes else '—'}</dd></div>
-      <div><dt>Remaining to log in KaryaKeeper</dt><dd>{fmt_minutes(remaining_minutes) if remaining_minutes else '—'}</dd></div>
-      <div><dt>Completed</dt><dd>{f'{processed_count}/{len(entries)}' if entries else 'Done'}</dd></div>
-    </dl>
-    """,
-    unsafe_allow_html=True,
-)
+    st.markdown(
+        f"""
+        <dl class="kk-summary">
+          <div><dt>Attendance</dt><dd>{fmt_minutes(worked_minutes) if worked_minutes else '—'}</dd></div>
+          <div><dt>Already logged</dt><dd>{fmt_minutes(logged_minutes) if logged_minutes else '—'}</dd></div>
+          <div><dt>Remaining to log in KaryaKeeper</dt><dd>{fmt_minutes(remaining_minutes) if remaining_minutes else '—'}</dd></div>
+        </dl>
+        """,
+        unsafe_allow_html=True,
+    )
 
 main_col, side_col = st.columns([2.4, 1], gap="large")
 
@@ -848,7 +824,8 @@ with side_col:
         st.markdown("\n".join(lines))
         total_label = f"Total worked: **{fmt_minutes(worked_minutes)}**" if worked_minutes else "Total worked: —"
         if ongoing:
-            total_label += " *(incl. ongoing session, as of last refresh)*"
+            asof = st.session_state.get("fetched_at") or "last refresh"
+            total_label += f" *(incl. ongoing session as of {asof})*"
         st.markdown(total_label)
     else:
         st.caption("No swipe details available.")
@@ -886,7 +863,7 @@ with main_col:
         )
 
         ready_indices = [i for i in range(len(entries)) if entry_is_ready(i)]
-        actions = st.columns([2.1, 2.4, 5.5])
+        actions = st.columns([2.8, 2.8, 4.4])
         with actions[0]:
             if st.button("＋ Add manual entry", use_container_width=True):
                 add_manual_entry()

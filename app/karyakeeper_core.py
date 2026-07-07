@@ -214,6 +214,9 @@ def consolidate_blocks(swipes):
 def filter_existing_blocks(blocks, existing_times, target_date):
     """Subtract existing continuous intervals and return safe 15-minute blocks.
 
+    The day's first IN is floored and its last OUT is ceiled to 15 minutes (both favour
+    the employee); every punch in between rounds to the nearest quarter, so mid-day
+    breaks are reflected as before and blocks never overlap.
     Any partial 15-minute segment touched by an existing entry is excluded. This
     intentionally favours avoiding a duplicate log over filling a sub-15-minute gap.
     """
@@ -234,10 +237,10 @@ def filter_existing_blocks(blocks, existing_times, target_date):
 
     filtered_blocks = []
 
-    for start_dt, end_dt in blocks:
-        start_r = round_dt_15_mins(start_dt)
+    for i, (start_dt, end_dt) in enumerate(blocks):
+        start_r = floor_dt_15_mins(start_dt) if i == 0 else round_dt_15_mins(start_dt)
         if end_dt:
-            end_r = round_dt_15_mins(end_dt)
+            end_r = ceil_dt_15_mins(end_dt) if i == len(blocks) - 1 else round_dt_15_mins(end_dt)
             is_running = False
         else:
             if target_day != today_ist:
@@ -246,7 +249,7 @@ def filter_existing_blocks(blocks, existing_times, target_date):
                     "without a matching OUT punch. Enter the missing OUT punch in GreytHR or use a manual entry."
                 )
             now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
-            end_r = round_dt_15_mins(now_ist)
+            end_r = ceil_dt_15_mins(now_ist)
             is_running = True
 
         if end_r <= start_r:

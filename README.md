@@ -20,7 +20,7 @@ This tool automates the process of logging your daily timesheets into KaryaKeepe
 ## Daily Usage
 1. At the end of your workday, simply double-click the **`run.bat`** file.
 2. A terminal window opens a local web app and automatically opens it in your browser (usually at `http://127.0.0.1:8501`). The server is bound to your computer only and is not exposed to the local network. Keep the terminal window open while you use the app; closing it stops the app.
-3. Pick the date you want to log (defaults to today) and click **Fetch Attendance**. Step-by-step status messages show progress as it reads your GreytHR attendance, logs into KaryaKeeper, and compares against what you've already logged. The first fetch after starting the app takes the longest because it signs into both sites; after that the sessions stay active in the background, so loading tasks, saving entries, and fetching other dates are all much faster.
+3. Today's attendance is fetched automatically as soon as the app opens — step-by-step status messages show progress as it reads your GreytHR attendance, logs into KaryaKeeper, and compares against what you've already logged. To log a different date, pick it and click **Fetch Attendance**. The first fetch after starting the app takes the longest because it signs into both sites; after that the sessions stay active in the background, so loading tasks, saving entries, and fetching other dates are all much faster.
 4. The page then shows everything in order, just like the old terminal output:
    - **Summary** — attendance, already logged, remaining time, and completion count at a glance.
    - **Entries to complete** — the main work area appears first, with one card per unlogged time block (max 3 hours each).
@@ -29,13 +29,12 @@ This tool automates the process of logging your daily timesheets into KaryaKeepe
      - **Start / End time**: Editable time fields. Changing a start time automatically re-splits the rows below into fresh 3-hour blocks up to your actual clock-out time. Changing an end time shortens/extends just that row and reflows the rows after it the same way.
      - **Project / Task**: Pick from dropdowns. The task list loads automatically once you pick a project.
      - **Remark**: A short description of what you worked on.
-     - **Apply below**: Copies Project, Task, and Remark to later pending rows.
      - **Skip / Restore**: Keeps a row local without submitting it.
      - **Add manual entry**: Adds a missing block without changing attendance data.
      - **Save / Save all ready**: Saves one completed row or all currently valid rows. Every row is validated for duration and overlap first.
-5. Once an entry is saved, it locks (shown with a green "Saved" badge) so it can't be accidentally double-logged. You can leave the app at any point — saved entries and everything you've typed stay in `%USERPROFILE%\.karyakeeper` and reload automatically if you refresh the page or close and reopen the app.
-6. **State is remembered separately for each date.** Opening the app on a new day starts fresh for that day, while switching the date picker back to an earlier date you already worked on restores exactly what you had there — no need to re-fetch.
-7. **Refresh attendance** asks for confirmation before replacing pending rows. **Clear local draft** also requires confirmation and affects only the selected date.
+5. Once an entry is saved, it locks (shown with a green "Saved" badge) so it can't be accidentally double-logged. Saved entries are safe in KaryaKeeper itself, and your typed progress is kept in `%USERPROFILE%\.karyakeeper` while you work.
+6. **State is remembered separately for each date.** Switching the date picker back to an earlier date you already worked on restores exactly what you had there — no need to re-fetch.
+7. **Refresh attendance** is a hard refresh: it discards the selected date's local draft, re-validates the sign-in sessions (logging in again automatically if they expired), and reloads attendance, logged entries, and all calculated totals fresh. Opening the app does the same for today automatically, so unsaved draft rows do not survive a refresh or an app restart.
 
 ## Troubleshooting
 - **`Error: Unable to update lock within the stale threshold ... __dirlock`** during setup: this happened in older versions because the browser was downloaded into the project folder, and OneDrive sync corrupted the download lock. Pull the latest version of this tool and re-run `setup.bat` — it now downloads outside OneDrive and cleans up the old broken folder automatically.
