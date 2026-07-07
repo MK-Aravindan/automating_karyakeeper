@@ -40,6 +40,9 @@ h1 {letter-spacing: -0.3px;}
 .kk-summary dd {font-size:2rem; line-height:1.2; margin:0; font-weight:600;}
 /* Pin the attendance column so it stays visible while the entries list scrolls */
 [data-testid="stColumn"]:has(.attendance-sticky) {position: sticky; top: 3.5rem; align-self: flex-start;}
+/* The marker is only a positioning hook; keep it in the DOM for :has() but give it
+   no layout box so it adds no empty gap above the attendance heading */
+[data-testid="stElementContainer"]:has(.attendance-sticky) {display: none;}
 /* Keep the narrow attendance table readable and scrollable instead of clipped */
 [data-testid="stColumn"]:has(.attendance-sticky) table {font-size: 0.85rem;}
 [data-testid="stColumn"]:has(.attendance-sticky) .stMarkdown {overflow-x: auto;}
@@ -242,11 +245,13 @@ def fmt_minutes(m):
 def build_session_rows(swipes):
     rows = []
     prev_out = None
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
     for in_dt, out_dt in kkc.swipe_sessions(swipes):
         rows.append({
             "in": in_dt.strftime("%H:%M"),
             "out": out_dt.strftime("%H:%M") if out_dt else None,
             "minutes": int((out_dt - in_dt).total_seconds() // 60) if out_dt else None,
+            "elapsed": None if out_dt else max(0, int((now_ist - in_dt).total_seconds() // 60)),
             "break_min": int((in_dt - prev_out).total_seconds() // 60) if prev_out else None,
         })
         if out_dt:
@@ -556,6 +561,8 @@ def apply_end_edit(i, new_end_str):
 
 def on_start_change(i):
     st.session_state.pop("edit_error", None)
+    if f"start_{i}" not in st.session_state:
+        return
     new_val = st.session_state[f"start_{i}"].strftime("%H:%M")
     if not apply_start_edit(i, new_val):
         st.session_state[f"start_{i}"] = datetime.strptime(
@@ -565,6 +572,8 @@ def on_start_change(i):
 
 def on_end_change(i):
     st.session_state.pop("edit_error", None)
+    if f"end_{i}" not in st.session_state:
+        return
     if not apply_end_edit(i, st.session_state[f"end_{i}"]):
         st.session_state[f"end_{i}"] = st.session_state["entries"][i]["end"]
 
@@ -587,6 +596,8 @@ def end_time_options(start_str, current_end, maximum_end=None):
 
 
 def on_project_change(i):
+    if f"project_{i}" not in st.session_state:
+        return
     entries = st.session_state["entries"]
     selected_id = st.session_state[f"project_{i}"]
     if not selected_id:
@@ -607,6 +618,8 @@ def on_project_change(i):
 
 
 def on_task_change(i, tasks):
+    if f"task_{i}" not in st.session_state:
+        return
     entries = st.session_state["entries"]
     selected_id = st.session_state[f"task_{i}"]
     if not selected_id:
@@ -620,6 +633,8 @@ def on_task_change(i, tasks):
 
 
 def on_remark_change(i):
+    if f"remark_{i}" not in st.session_state:
+        return
     entries = st.session_state["entries"]
     entries[i]["remark"] = st.session_state[f"remark_{i}"]
     save_state()
@@ -792,7 +807,7 @@ sessions = st.session_state.get("sessions") or []
 existing_entries = st.session_state.get("existing_entries") or []
 entries = st.session_state.get("entries", [])
 
-worked_minutes = sum(s["minutes"] or 0 for s in sessions)
+worked_minutes = sum(s["minutes"] if s["minutes"] is not None else (s.get("elapsed") or 0) for s in sessions)
 logged_minutes = kkc.total_interval_minutes(
     target_date,
     [(entry["start"], entry["end"]) for entry in existing_entries],
@@ -812,7 +827,7 @@ st.markdown(
     <dl class="kk-summary">
       <div><dt>Attendance</dt><dd>{fmt_minutes(worked_minutes) if worked_minutes else '—'}</dd></div>
       <div><dt>Already logged</dt><dd>{fmt_minutes(logged_minutes) if logged_minutes else '—'}</dd></div>
-      <div><dt>Remaining</dt><dd>{fmt_minutes(remaining_minutes) if remaining_minutes else '—'}</dd></div>
+      <div><dt>Remaining to log in KaryaKeeper</dt><dd>{fmt_minutes(remaining_minutes) if remaining_minutes else '—'}</dd></div>
       <div><dt>Completed</dt><dd>{f'{processed_count}/{len(entries)}' if entries else 'Done'}</dd></div>
     </dl>
     """,
@@ -833,14 +848,19 @@ with side_col:
         ongoing = False
         for idx, session in enumerate(sessions):
             out = session["out"] or "Not yet out"
-            duration = fmt_minutes(session["minutes"]) if session["minutes"] is not None else "ongoing"
+            if session["minutes"] is not None:
+                duration = fmt_minutes(session["minutes"])
+            elif session.get("elapsed"):
+                duration = f"{fmt_minutes(session['elapsed'])} so far"
+            else:
+                duration = "ongoing"
             break_before = fmt_minutes(session["break_min"]) if session["break_min"] else "—"
             lines.append(f"| {idx + 1} | {session['in']} | {out} | {duration} | {break_before} |")
             ongoing = ongoing or session["minutes"] is None
         st.markdown("\n".join(lines))
         total_label = f"Total worked: **{fmt_minutes(worked_minutes)}**" if worked_minutes else "Total worked: —"
         if ongoing:
-            total_label += " *(plus an ongoing session)*"
+            total_label += " *(incl. ongoing session, as of last refresh)*"
         st.markdown(total_label)
     else:
         st.caption("No swipe details available.")
