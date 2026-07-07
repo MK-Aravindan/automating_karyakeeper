@@ -44,6 +44,25 @@ IF NOT EXIST "%KARYAKEEPER_CONFIG_FILE%" (
     exit /b 1
 )
 
+:: Catch the case where setup created the template but the user closed Notepad
+:: without filling it in. Otherwise they would only discover the blank fields
+:: from an error inside the browser. Reopen the file so they can complete it.
+%PY_CMD% -c "import os,sys; txt=open(os.environ['KARYAKEEPER_CONFIG_FILE'],encoding='utf-8-sig',errors='ignore').read(); d=dict(l.strip().split('=',1) for l in txt.splitlines() if '=' in l and not l.strip().startswith('#')); req=['GREYTHR_DOMAIN','GREYTHR_USERNAME','GREYTHR_PASSWORD','KARYAKEEPER_URL','KARYAKEEPER_USERNAME','KARYAKEEPER_PASSWORD']; sys.exit(1 if any(not d.get(k,'').strip() for k in req) else 0)"
+IF %ERRORLEVEL% NEQ 0 (
+    echo ===================================================
+    echo ACTION REQUIRED: your credentials are not filled in
+    echo ===================================================
+    echo Opening the configuration file in Notepad:
+    echo   "%KARYAKEEPER_CONFIG_FILE%"
+    echo.
+    echo Enter your GreytHR and KaryaKeeper username and password,
+    echo save the file, then run run.bat again.
+    echo.
+    start "" notepad "%KARYAKEEPER_CONFIG_FILE%"
+    pause
+    exit /b 1
+)
+
 :: Pre-seed Streamlit's credentials file so its first-run "enter your email" prompt
 :: never appears and blocks this window waiting for input
 IF NOT EXIST "%USERPROFILE%\.streamlit" mkdir "%USERPROFILE%\.streamlit"

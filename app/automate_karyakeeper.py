@@ -15,7 +15,7 @@ ROOT_DIR = kkc.ROOT_DIR
 
 def main():
     kkc.ensure_local_storage()
-    load_dotenv(kkc.CONFIG_FILE)
+    load_dotenv(kkc.CONFIG_FILE, encoding="utf-8-sig")
 
     gt_domain = os.getenv("GREYTHR_DOMAIN")
     gt_user = os.getenv("GREYTHR_USERNAME")

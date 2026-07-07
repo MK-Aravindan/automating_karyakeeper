@@ -93,6 +93,7 @@ echo.
 
 :: 4. Configure the local .env File
 echo [4/4] Checking configuration file...
+set "FRESH_CONFIG="
 IF EXIST ".env" IF NOT EXIST "%KARYAKEEPER_CONFIG_FILE%" (
     echo Moving the existing configuration out of the OneDrive project folder...
     move /Y ".env" "%KARYAKEEPER_CONFIG_FILE%" >nul
@@ -107,17 +108,34 @@ IF NOT EXIST "%KARYAKEEPER_CONFIG_FILE%" (
         echo KARYAKEEPER_USERNAME=
         echo KARYAKEEPER_PASSWORD=
     ) > "%KARYAKEEPER_CONFIG_FILE%"
-    echo.
-    echo A new local configuration file has been created.
-    echo Opening .env file in Notepad for you to configure...
-    start "" notepad "%KARYAKEEPER_CONFIG_FILE%"
+    set FRESH_CONFIG=1
 ) ELSE (
     echo Local configuration already exists.
 )
 
 echo.
-echo ===================================================
-echo Setup is complete!
-echo You can now run the application using 'run.bat'.
-echo ===================================================
+:: A freshly created template still has blank credentials. Do not claim success;
+:: open it and make the required action impossible to miss, even if the user
+:: closes Notepad, because the terminal window stays open on the pause below.
+IF DEFINED FRESH_CONFIG (
+    start "" notepad "%KARYAKEEPER_CONFIG_FILE%"
+    echo ============================================================
+    echo   ACTION REQUIRED - you must enter your credentials
+    echo ============================================================
+    echo A configuration file has opened in Notepad:
+    echo   "%KARYAKEEPER_CONFIG_FILE%"
+    echo.
+    echo Type your GreytHR and KaryaKeeper username and password,
+    echo then save the file and close Notepad.
+    echo.
+    echo If you closed Notepad by mistake, open that same file again,
+    echo fill in the values and save. The app will not start until all
+    echo six values are filled in.
+    echo ============================================================
+) ELSE (
+    echo ===================================================
+    echo Setup is complete!
+    echo You can now run the application using 'run.bat'.
+    echo ===================================================
+)
 pause

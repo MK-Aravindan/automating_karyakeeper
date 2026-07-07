@@ -50,7 +50,8 @@ h1 {letter-spacing: -0.3px;}
 """, unsafe_allow_html=True)
 
 migrated_local_data = kkc.ensure_local_storage()
-load_dotenv(kkc.CONFIG_FILE)
+# utf-8-sig so a .env saved by Notepad with a BOM still parses correctly
+load_dotenv(kkc.CONFIG_FILE, encoding="utf-8-sig")
 GT_DOMAIN = os.getenv("GREYTHR_DOMAIN")
 GT_USER = os.getenv("GREYTHR_USERNAME")
 GT_PASS = os.getenv("GREYTHR_PASSWORD")

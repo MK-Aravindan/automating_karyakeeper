@@ -155,7 +155,7 @@ def main():
     import karyakeeper_core as kkc
 
     kkc.ensure_local_storage()
-    load_dotenv(kkc.CONFIG_FILE)
+    load_dotenv(kkc.CONFIG_FILE, encoding="utf-8-sig")
     domain = os.getenv("GREYTHR_DOMAIN")
     username = os.getenv("GREYTHR_USERNAME")
     password = os.getenv("GREYTHR_PASSWORD")
