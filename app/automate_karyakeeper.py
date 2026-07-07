@@ -55,7 +55,6 @@ def main():
 
     if not attendance or not attendance.get("swipes"):
         print("No punches found for this date. Exiting.")
-        kkc.cleanup_auth_files()
         return
 
     swipes = attendance["swipes"]
@@ -63,7 +62,6 @@ def main():
 
     if not blocks:
         print("Could not build any work blocks from the swipe data. Exiting.")
-        kkc.cleanup_auth_files()
         return
 
     print("\n[2/4] Logging into KaryaKeeper...")
@@ -81,7 +79,6 @@ def main():
                 print("Failed to log into KaryaKeeper:", e)
                 print("Please check your KARYAKEEPER_USERNAME and KARYAKEEPER_PASSWORD in the .env file.")
                 browser.close()
-                kkc.cleanup_auth_files()
                 return
 
             print(f"\n[3/4] Fetching existing entries for {target_date} from KaryaKeeper...")
@@ -100,7 +97,6 @@ def main():
             if not chunked_blocks:
                 print("\nAll time blocks for this date have already been logged. Exiting.")
                 browser.close()
-                kkc.cleanup_auth_files()
                 return
 
             print("\nFiltered & Chunked Work Blocks (Max 3 hours):")
@@ -116,7 +112,6 @@ def main():
             if not projects:
                 print("No projects found! Please check your KaryaKeeper account.")
                 browser.close()
-                kkc.cleanup_auth_files()
                 return
 
             print("\n[4/4] Timesheet Details")
@@ -146,7 +141,6 @@ def main():
                         if p_input.lower() == 'q':
                             print("Exiting... Entries already logged have been saved.")
                             browser.close()
-                            kkc.cleanup_auth_files()
                             return
                         if p_input == '0':
                             print(f"\n--- Edit Time for Entry {current_idx+1} ---")
@@ -182,7 +176,6 @@ def main():
                     except (KeyboardInterrupt, EOFError):
                         print("\nExiting...")
                         browser.close()
-                        kkc.cleanup_auth_files()
                         return
 
                 # --- Task fetch ---
@@ -215,7 +208,6 @@ def main():
                         if t_input.lower() == 'q':
                             print("Exiting... Entries already logged have been saved.")
                             browser.close()
-                            kkc.cleanup_auth_files()
                             return
                         t_idx = int(t_input) - 1
                         if t_idx < 0 or t_idx >= len(tasks):
@@ -228,7 +220,6 @@ def main():
                     except (KeyboardInterrupt, EOFError):
                         print("\nExiting...")
                         browser.close()
-                        kkc.cleanup_auth_files()
                         return
 
                 try:
@@ -236,7 +227,6 @@ def main():
                 except (KeyboardInterrupt, EOFError):
                     print("\nExiting...")
                     browser.close()
-                    kkc.cleanup_auth_files()
                     return
 
                 kkc.fill_and_submit_timesheet_form(page, kk_date, start_rounded, end_rounded, remark, selected_project, selected_task_id, selected_task_title)
@@ -264,7 +254,6 @@ def main():
             print(f"\nUnexpected error: {e}")
         finally:
             browser.close()
-            kkc.cleanup_auth_files()
 
 if __name__ == "__main__":
     main()

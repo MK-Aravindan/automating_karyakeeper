@@ -73,21 +73,12 @@ IF NOT EXIST "%USERPROFILE%\.streamlit\credentials.toml" (
     ) > "%USERPROFILE%\.streamlit\credentials.toml"
 )
 
-:: Clear any sign-in session files left behind by older versions or crashes.
-:: The app itself keeps sessions in memory only and never writes them to disk.
-if exist "auth.json" del /q "auth.json" >nul 2>&1
-if exist "kk_auth.json" del /q "kk_auth.json" >nul 2>&1
-
 echo.
 echo Starting KaryaKeeper Automation web app...
 echo A browser tab will open automatically. Close this window to stop the app.
-echo Your sign-in sessions are cleared automatically when the app stops.
 echo.
 
 %PY_CMD% -m streamlit run app\streamlit_app.py --server.address 127.0.0.1
-
-if exist "auth.json" del /q "auth.json" >nul 2>&1
-if exist "kk_auth.json" del /q "kk_auth.json" >nul 2>&1
 
 echo.
 pause

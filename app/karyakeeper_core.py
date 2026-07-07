@@ -340,17 +340,6 @@ def total_interval_minutes(target_date, intervals):
     return int(sum((end - start).total_seconds() for start, end in merged) // 60)
 
 
-def cleanup_auth_files():
-    """Remove session files from the root project directory."""
-    for f in ["auth.json", "kk_auth.json"]:
-        full_path = os.path.join(ROOT_DIR, f)
-        if os.path.exists(full_path):
-            try:
-                os.remove(full_path)
-            except Exception:
-                pass
-
-
 def validate_date(date_str):
     """Validate that the date string is in YYYY-MM-DD format."""
     try:

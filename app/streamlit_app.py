@@ -80,7 +80,6 @@ if missing:
 def get_worker():
     """One browser worker for the whole app run. Its login sessions live only in
     memory, so nothing needs cleaning up beyond closing the browser on exit."""
-    kkc.cleanup_auth_files()  # clear any session files left behind by older versions
     w = BrowserWorker(GT_DOMAIN, GT_USER, GT_PASS, KK_URL, KK_USER, KK_PASS)
     atexit.register(w.close)
     return w
