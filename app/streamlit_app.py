@@ -31,7 +31,7 @@ st.markdown("""
 <style>
 .block-container {max-width: 1250px; padding-top: 2.2rem; margin: auto;}
 .stButton button {border-radius: 8px;}
-.stButton button p {white-space: nowrap;}
+.stButton button p {white-space: normal; overflow-wrap: break-word;}
 h1 {letter-spacing: -0.3px;}
 .kk-summary {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1rem; margin:0.75rem 0 1.25rem;}
 .kk-summary > div {min-width:0;}
@@ -138,7 +138,7 @@ def clear_all_row_widget_keys():
     for k in list(st.session_state.keys()):
         if k.startswith((
             "start_", "end_", "project_", "task_", "remark_", "task_placeholder_",
-            "task_loading_", "task_error_", "save_", "apply_below_", "skip_", "restore_",
+            "task_loading_", "task_error_", "save_", "skip_", "restore_",
         )):
             st.session_state.pop(k)
 
@@ -646,18 +646,6 @@ def format_task(task):
     return f"[{group}] {title}" if group else title
 
 
-def copy_details_to_below(i):
-    source = st.session_state["entries"][i]
-    for idx, entry in enumerate(st.session_state["entries"][i + 1:], start=i + 1):
-        if entry.get("saved") or entry.get("skipped"):
-            continue
-        for field in ("project_id", "project_text", "task_id", "task_title", "remark"):
-            entry[field] = source.get(field)
-        for prefix in ("project_", "task_", "remark_"):
-            st.session_state.pop(f"{prefix}{idx}", None)
-    save_state()
-
-
 def toggle_skip(i):
     entry = st.session_state["entries"][i]
     entry["skipped"] = not entry.get("skipped", False)
@@ -1033,7 +1021,7 @@ with main_col:
                 if validation_error:
                     st.error(validation_error, icon="⚠️")
 
-                bottom = st.columns([5.6, 1.7, 1.2, 1.5], vertical_alignment="bottom")
+                bottom = st.columns([6, 2, 2], vertical_alignment="bottom")
                 with bottom[0]:
                     st.text_input(
                         "Remark / description",
@@ -1043,22 +1031,11 @@ with main_col:
                         on_change=on_remark_change,
                         args=(i,),
                     )
-                details_ready = bool(entry.get("project_id") and entry.get("task_id") and entry.get("remark", "").strip())
                 with bottom[1]:
-                    if st.button(
-                        "Apply below",
-                        key=f"apply_below_{i}",
-                        disabled=not details_ready or i == len(entries) - 1,
-                        use_container_width=True,
-                        help="Copy project, task, and remark to later pending rows.",
-                    ):
-                        copy_details_to_below(i)
-                        st.rerun()
-                with bottom[2]:
                     if st.button("Skip", key=f"skip_{i}", use_container_width=True):
                         toggle_skip(i)
                         st.rerun()
-                with bottom[3]:
+                with bottom[2]:
                     save_clicked = st.button(
                         "💾 Save",
                         key=f"save_{i}",
