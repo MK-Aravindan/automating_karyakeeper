@@ -29,7 +29,7 @@ st.set_page_config(page_title="KaryaKeeper Automation", page_icon="🗓️", lay
 
 st.markdown("""
 <style>
-.block-container {max-width: 1150px; padding-top: 2.2rem; margin: auto;}
+.block-container {max-width: 1250px; padding-top: 2.2rem; margin: auto;}
 .stButton button {border-radius: 8px;}
 .stButton button p {white-space: nowrap;}
 h1 {letter-spacing: -0.3px;}
@@ -38,6 +38,18 @@ h1 {letter-spacing: -0.3px;}
 /* Inherit theme colors so the summary stays readable in dark mode too */
 .kk-summary dt {font-size:0.875rem; opacity:0.65; margin-bottom:0.15rem;}
 .kk-summary dd {font-size:2rem; line-height:1.2; margin:0; font-weight:600;}
+/* Pin the attendance column so it stays visible while the entries list scrolls */
+[data-testid="stColumn"]:has(.attendance-sticky) {position: sticky; top: 3.5rem; align-self: flex-start;}
+/* Keep the narrow attendance table readable and scrollable instead of clipped */
+[data-testid="stColumn"]:has(.attendance-sticky) table {font-size: 0.85rem;}
+[data-testid="stColumn"]:has(.attendance-sticky) .stMarkdown {overflow-x: auto;}
+/* Below the width where a side panel would cramp, stack both panels full-width so
+   everything stays fully visible (attendance first, then the entries to fill in) */
+@media (max-width: 1150px) {
+  [data-testid="stHorizontalBlock"]:has(.attendance-sticky) {flex-direction: column;}
+  [data-testid="stHorizontalBlock"]:has(.attendance-sticky) > [data-testid="stColumn"] {width: 100% !important; flex: 1 1 100% !important;}
+  [data-testid="stColumn"]:has(.attendance-sticky) {position: static; order: -1;}
+}
 @media (max-width: 700px) {
   .block-container {padding: 1rem 0.75rem 2rem;}
   h1 {font-size: 2rem !important; line-height: 1.15 !important;}
@@ -45,6 +57,8 @@ h1 {letter-spacing: -0.3px;}
   .stButton button {min-height: 44px;}
   .kk-summary {grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem 0.75rem;}
   .kk-summary dd {font-size:1.65rem;}
+  /* On stacked mobile layout the panel should scroll normally, not pin */
+  [data-testid="stColumn"]:has(.attendance-sticky) {position: static;}
 }
 </style>
 """, unsafe_allow_html=True)
@@ -805,233 +819,239 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.subheader(f"✍️ Entries to complete — {nice_date}")
+main_col, side_col = st.columns([2.4, 1], gap="large")
 
-if not entries:
-    st.success("All detected attendance is already logged. No new entry is required.", icon="✅")
-else:
-    st.progress(processed_count / len(entries), text=f"{processed_count} of {len(entries)} entries completed")
-    st.caption(
-        "Times stay inside their attendance block and each entry is limited to 3 hours. "
-        "Skipped rows remain local and are never submitted."
-    )
+# Attendance is pinned in the side column (see the sticky CSS) so it stays in view
+with side_col:
+    st.markdown('<div class="attendance-sticky"></div>', unsafe_allow_html=True)
+    st.subheader("📋 Attendance details")
+    if sessions:
+        lines = [
+            "| # | In | Out | Duration | Break |",
+            "|:-:|:-:|:-:|:-:|:-:|",
+        ]
+        ongoing = False
+        for idx, session in enumerate(sessions):
+            out = session["out"] or "Not yet out"
+            duration = fmt_minutes(session["minutes"]) if session["minutes"] is not None else "ongoing"
+            break_before = fmt_minutes(session["break_min"]) if session["break_min"] else "—"
+            lines.append(f"| {idx + 1} | {session['in']} | {out} | {duration} | {break_before} |")
+            ongoing = ongoing or session["minutes"] is None
+        st.markdown("\n".join(lines))
+        total_label = f"Total worked: **{fmt_minutes(worked_minutes)}**" if worked_minutes else "Total worked: —"
+        if ongoing:
+            total_label += " *(plus an ongoing session)*"
+        st.markdown(total_label)
+    else:
+        st.caption("No swipe details available.")
 
-    ready_indices = [i for i in range(len(entries)) if entry_is_ready(i)]
-    actions = st.columns([2.1, 2.4, 5.5])
-    with actions[0]:
-        if st.button("＋ Add manual entry", use_container_width=True):
-            add_manual_entry()
-            st.rerun()
-    with actions[1]:
-        save_all_clicked = st.button(
-            f"💾 Save all ready ({len(ready_indices)})",
-            type="primary",
-            disabled=not ready_indices,
-            use_container_width=True,
+with main_col:
+    st.subheader(f"🕑 Already logged in KaryaKeeper ({len(existing_entries)})")
+    if existing_entries:
+        st.caption("These entries are already saved in KaryaKeeper and are shown here for reference only.")
+        logged_rows = [
+            {
+                "Start": entry["start"],
+                "End": entry["end"],
+                "Duration": fmt_minutes(duration_minutes(entry["start"], entry["end"])),
+                "Project": entry["project"],
+                "Task": entry["task"],
+                "Remark": entry["remark"],
+            }
+            for entry in sorted(existing_entries, key=lambda item: (item["start"], item["end"]))
+        ]
+        st.dataframe(logged_rows, hide_index=True, use_container_width=True)
+    else:
+        st.caption("No entries are logged for this date.")
+
+    st.divider()
+
+    st.subheader(f"✍️ Entries to complete — {nice_date}")
+
+    if not entries:
+        st.success("All detected attendance is already logged. No new entry is required.", icon="✅")
+    else:
+        st.progress(processed_count / len(entries), text=f"{processed_count} of {len(entries)} entries completed")
+        st.caption(
+            "Times stay inside their attendance block and each entry is limited to 3 hours. "
+            "Skipped rows remain local and are never submitted."
         )
-    if save_all_clicked and bulk_save_ready_entries(ready_indices):
-        st.rerun()
 
-    if st.session_state.get("edit_error"):
-        st.error(st.session_state.pop("edit_error"))
+        ready_indices = [i for i in range(len(entries)) if entry_is_ready(i)]
+        actions = st.columns([2.1, 2.4, 5.5])
+        with actions[0]:
+            if st.button("＋ Add manual entry", use_container_width=True):
+                add_manual_entry()
+                st.rerun()
+        with actions[1]:
+            save_all_clicked = st.button(
+                f"💾 Save all ready ({len(ready_indices)})",
+                type="primary",
+                disabled=not ready_indices,
+                use_container_width=True,
+            )
+        if save_all_clicked and bulk_save_ready_entries(ready_indices):
+            st.rerun()
 
-    for i, entry in enumerate(entries):
-        saved = entry.get("saved", False)
-        skipped = entry.get("skipped", False)
-        locked = saved or row_is_locked_by_later_save(i)
-        entry_duration = duration_minutes(entry["start"], entry["end"])
+        if st.session_state.get("edit_error"):
+            st.error(st.session_state.pop("edit_error"))
 
-        with st.container(border=True):
-            head = st.columns([8.2, 1.8], vertical_alignment="center")
-            with head[0]:
-                kind = "Manual" if entry.get("manual") else f"Entry {i + 1}"
-                title = f"**{kind}** &nbsp;·&nbsp; {entry['start']}–{entry['end']} &nbsp;·&nbsp; {fmt_minutes(entry_duration)}"
-                if entry.get("is_running") and not saved:
-                    title += " &nbsp;·&nbsp; :orange[ongoing]"
-                st.markdown(title)
-            with head[1]:
+        for i, entry in enumerate(entries):
+            saved = entry.get("saved", False)
+            skipped = entry.get("skipped", False)
+            locked = saved or row_is_locked_by_later_save(i)
+            entry_duration = duration_minutes(entry["start"], entry["end"])
+
+            with st.container(border=True):
+                head = st.columns([8.2, 1.8], vertical_alignment="center")
+                with head[0]:
+                    kind = "Manual" if entry.get("manual") else f"Entry {i + 1}"
+                    title = f"**{kind}** &nbsp;·&nbsp; {entry['start']}–{entry['end']} &nbsp;·&nbsp; {fmt_minutes(entry_duration)}"
+                    if entry.get("is_running") and not saved:
+                        title += " &nbsp;·&nbsp; :orange[ongoing]"
+                    st.markdown(title)
+                with head[1]:
+                    if saved:
+                        st.markdown(":green[✅ Saved]")
+                    elif skipped:
+                        st.markdown(":gray[— Skipped]")
+                    else:
+                        st.markdown(":orange[● Pending]")
+
                 if saved:
-                    st.markdown(":green[✅ Saved]")
-                elif skipped:
-                    st.markdown(":gray[— Skipped]")
-                else:
-                    st.markdown(":orange[● Pending]")
+                    st.caption(f"{entry['project_text']} → {entry['task_title']} — “{entry['remark']}”")
+                    continue
+                if skipped:
+                    restore_cols = st.columns([8, 2])
+                    restore_cols[0].caption("This row will not be submitted to KaryaKeeper.")
+                    with restore_cols[1]:
+                        if st.button("Restore", key=f"restore_{i}", use_container_width=True):
+                            toggle_skip(i)
+                            st.rerun()
+                    continue
 
-            if saved:
-                st.caption(f"{entry['project_text']} → {entry['task_title']} — “{entry['remark']}”")
-                continue
-            if skipped:
-                restore_cols = st.columns([8, 2])
-                restore_cols[0].caption("This row will not be submitted to KaryaKeeper.")
-                with restore_cols[1]:
-                    if st.button("Restore", key=f"restore_{i}", use_container_width=True):
+                if entry.get("is_running"):
+                    st.warning("You are still clocked in; refresh attendance after clocking out before the final save.", icon="⚠️")
+
+                widgets = st.columns([1.6, 1.6, 2.2, 2.6], vertical_alignment="top")
+                with widgets[0]:
+                    st.time_input(
+                        "Start time",
+                        value=datetime.strptime(entry["start"], "%H:%M").time(),
+                        key=f"start_{i}",
+                        disabled=locked,
+                        step=900,
+                        on_change=on_start_change,
+                        args=(i,),
+                        help="Locked while a later entry is saved." if locked else None,
+                    )
+                with widgets[1]:
+                    maximum_end = None if entry.get("manual") else entry.get("source_end")
+                    end_options = end_time_options(entry["start"], entry["end"], maximum_end)
+                    st.selectbox(
+                        "End time",
+                        end_options,
+                        index=end_options.index(entry["end"]),
+                        key=f"end_{i}",
+                        disabled=locked,
+                        on_change=on_end_change,
+                        args=(i,),
+                        help="Limited to 3 hours and the detected attendance boundary.",
+                    )
+                with widgets[2]:
+                    project_options = [""] + [str(p["value"]) for p in st.session_state["projects"]]
+                    project_labels = {str(p["value"]): p["text"] for p in st.session_state["projects"]}
+                    selected_project = str(entry["project_id"]) if entry.get("project_id") else ""
+                    st.selectbox(
+                        "Project",
+                        project_options,
+                        index=project_options.index(selected_project) if selected_project in project_options else 0,
+                        format_func=lambda value, labels=project_labels: labels.get(value, "— Select project —"),
+                        key=f"project_{i}",
+                        on_change=on_project_change,
+                        args=(i,),
+                    )
+                with widgets[3]:
+                    if not entry.get("project_id"):
+                        st.selectbox("Task", [""], format_func=lambda _: "— Select a project first —", disabled=True, key=f"task_placeholder_{i}")
+                    else:
+                        pid = str(entry["project_id"])
+                        cache = st.session_state["tasks_cache"]
+                        slot = st.empty()
+                        if pid not in cache:
+                            slot.selectbox("Task", [""], format_func=lambda _: "Loading tasks…", disabled=True, key=f"task_loading_{i}")
+                            try:
+                                cache[pid] = get_worker().fetch_tasks(pid)
+                                save_state()
+                            except Exception as e:
+                                cache[pid] = None
+                                st.toast(f"Could not load tasks: {e}", icon="⚠️")
+                        tasks = cache.get(pid)
+                        if tasks is None:
+                            slot.selectbox("Task", [""], format_func=lambda _: "Tasks could not be loaded", disabled=True, key=f"task_error_{i}")
+                            if st.button("Retry tasks", key=f"retry_tasks_{i}"):
+                                cache.pop(pid, None)
+                                st.rerun()
+                        elif not tasks:
+                            slot.selectbox("Task", [""], format_func=lambda _: "No tasks found", disabled=True, key=f"task_placeholder_{i}")
+                        else:
+                            task_options = [""] + [str(t["id"]) for t in tasks]
+                            task_labels = {str(t["id"]): format_task(t) for t in tasks}
+                            selected_task = str(entry["task_id"]) if entry.get("task_id") else ""
+                            with slot:
+                                st.selectbox(
+                                    "Task",
+                                    task_options,
+                                    index=task_options.index(selected_task) if selected_task in task_options else 0,
+                                    format_func=lambda value, labels=task_labels: labels.get(value, "— Select task —"),
+                                    key=f"task_{i}",
+                                    on_change=on_task_change,
+                                    args=(i, tasks),
+                                )
+
+                validation_error = validate_entry(i)
+                if validation_error:
+                    st.error(validation_error, icon="⚠️")
+
+                bottom = st.columns([5.6, 1.7, 1.2, 1.5], vertical_alignment="bottom")
+                with bottom[0]:
+                    st.text_input(
+                        "Remark / description",
+                        value=entry.get("remark", ""),
+                        key=f"remark_{i}",
+                        placeholder="What did you work on during this block?",
+                        on_change=on_remark_change,
+                        args=(i,),
+                    )
+                details_ready = bool(entry.get("project_id") and entry.get("task_id") and entry.get("remark", "").strip())
+                with bottom[1]:
+                    if st.button(
+                        "Apply below",
+                        key=f"apply_below_{i}",
+                        disabled=not details_ready or i == len(entries) - 1,
+                        use_container_width=True,
+                        help="Copy project, task, and remark to later pending rows.",
+                    ):
+                        copy_details_to_below(i)
+                        st.rerun()
+                with bottom[2]:
+                    if st.button("Skip", key=f"skip_{i}", use_container_width=True):
                         toggle_skip(i)
                         st.rerun()
-                continue
+                with bottom[3]:
+                    save_clicked = st.button(
+                        "💾 Save",
+                        key=f"save_{i}",
+                        type="primary",
+                        disabled=not entry_is_ready(i),
+                        use_container_width=True,
+                        help="Complete the project, task, remark, and resolve time conflicts first.",
+                    )
 
-            if entry.get("is_running"):
-                st.warning("You are still clocked in; refresh attendance after clocking out before the final save.", icon="⚠️")
-
-            widgets = st.columns([1.2, 1.2, 2.3, 2.9], vertical_alignment="top")
-            with widgets[0]:
-                st.time_input(
-                    "Start time",
-                    value=datetime.strptime(entry["start"], "%H:%M").time(),
-                    key=f"start_{i}",
-                    disabled=locked,
-                    step=900,
-                    on_change=on_start_change,
-                    args=(i,),
-                    help="Locked while a later entry is saved." if locked else None,
-                )
-            with widgets[1]:
-                maximum_end = None if entry.get("manual") else entry.get("source_end")
-                end_options = end_time_options(entry["start"], entry["end"], maximum_end)
-                st.selectbox(
-                    "End time",
-                    end_options,
-                    index=end_options.index(entry["end"]),
-                    key=f"end_{i}",
-                    disabled=locked,
-                    on_change=on_end_change,
-                    args=(i,),
-                    help="Limited to 3 hours and the detected attendance boundary.",
-                )
-            with widgets[2]:
-                project_options = [""] + [str(p["value"]) for p in st.session_state["projects"]]
-                project_labels = {str(p["value"]): p["text"] for p in st.session_state["projects"]}
-                selected_project = str(entry["project_id"]) if entry.get("project_id") else ""
-                st.selectbox(
-                    "Project",
-                    project_options,
-                    index=project_options.index(selected_project) if selected_project in project_options else 0,
-                    format_func=lambda value, labels=project_labels: labels.get(value, "— Select project —"),
-                    key=f"project_{i}",
-                    on_change=on_project_change,
-                    args=(i,),
-                )
-            with widgets[3]:
-                if not entry.get("project_id"):
-                    st.selectbox("Task", [""], format_func=lambda _: "— Select a project first —", disabled=True, key=f"task_placeholder_{i}")
-                else:
-                    pid = str(entry["project_id"])
-                    cache = st.session_state["tasks_cache"]
-                    slot = st.empty()
-                    if pid not in cache:
-                        slot.selectbox("Task", [""], format_func=lambda _: "Loading tasks…", disabled=True, key=f"task_loading_{i}")
-                        try:
-                            cache[pid] = get_worker().fetch_tasks(pid)
-                            save_state()
-                        except Exception as e:
-                            cache[pid] = None
-                            st.toast(f"Could not load tasks: {e}", icon="⚠️")
-                    tasks = cache.get(pid)
-                    if tasks is None:
-                        slot.selectbox("Task", [""], format_func=lambda _: "Tasks could not be loaded", disabled=True, key=f"task_error_{i}")
-                        if st.button("Retry tasks", key=f"retry_tasks_{i}"):
-                            cache.pop(pid, None)
+                if save_clicked:
+                    with st.spinner(f"Saving Entry {i + 1} to KaryaKeeper..."):
+                        if do_save_entry(i):
                             st.rerun()
-                    elif not tasks:
-                        slot.selectbox("Task", [""], format_func=lambda _: "No tasks found", disabled=True, key=f"task_placeholder_{i}")
-                    else:
-                        task_options = [""] + [str(t["id"]) for t in tasks]
-                        task_labels = {str(t["id"]): format_task(t) for t in tasks}
-                        selected_task = str(entry["task_id"]) if entry.get("task_id") else ""
-                        with slot:
-                            st.selectbox(
-                                "Task",
-                                task_options,
-                                index=task_options.index(selected_task) if selected_task in task_options else 0,
-                                format_func=lambda value, labels=task_labels: labels.get(value, "— Select task —"),
-                                key=f"task_{i}",
-                                on_change=on_task_change,
-                                args=(i, tasks),
-                            )
 
-            validation_error = validate_entry(i)
-            if validation_error:
-                st.error(validation_error, icon="⚠️")
-
-            bottom = st.columns([5.6, 1.7, 1.2, 1.5], vertical_alignment="bottom")
-            with bottom[0]:
-                st.text_input(
-                    "Remark / description",
-                    value=entry.get("remark", ""),
-                    key=f"remark_{i}",
-                    placeholder="What did you work on during this block?",
-                    on_change=on_remark_change,
-                    args=(i,),
-                )
-            details_ready = bool(entry.get("project_id") and entry.get("task_id") and entry.get("remark", "").strip())
-            with bottom[1]:
-                if st.button(
-                    "Apply below",
-                    key=f"apply_below_{i}",
-                    disabled=not details_ready or i == len(entries) - 1,
-                    use_container_width=True,
-                    help="Copy project, task, and remark to later pending rows.",
-                ):
-                    copy_details_to_below(i)
-                    st.rerun()
-            with bottom[2]:
-                if st.button("Skip", key=f"skip_{i}", use_container_width=True):
-                    toggle_skip(i)
-                    st.rerun()
-            with bottom[3]:
-                save_clicked = st.button(
-                    "💾 Save",
-                    key=f"save_{i}",
-                    type="primary",
-                    disabled=not entry_is_ready(i),
-                    use_container_width=True,
-                    help="Complete the project, task, remark, and resolve time conflicts first.",
-                )
-
-            if save_clicked:
-                with st.spinner(f"Saving Entry {i + 1} to KaryaKeeper..."):
-                    if do_save_entry(i):
-                        st.rerun()
-
-    if all(e.get("saved") or e.get("skipped") for e in entries):
-        st.success("All rows are complete. Saved entries are in KaryaKeeper; skipped rows stayed local.", icon="✅")
-
-st.divider()
-
-st.subheader(f"📋 Attendance details — {nice_date}")
-if sessions:
-    lines = [
-        "| # | In-Time | Out-Time | Duration | Break before |",
-        "|:-:|:-:|:-:|:-:|:-:|",
-    ]
-    ongoing = False
-    for idx, session in enumerate(sessions):
-        out = session["out"] or "Not yet out"
-        duration = fmt_minutes(session["minutes"]) if session["minutes"] is not None else "ongoing"
-        break_before = fmt_minutes(session["break_min"]) if session["break_min"] else "—"
-        lines.append(f"| {idx + 1} | {session['in']} | {out} | {duration} | {break_before} |")
-        ongoing = ongoing or session["minutes"] is None
-    st.markdown("\n".join(lines))
-    total_label = f"Total worked: **{fmt_minutes(worked_minutes)}**" if worked_minutes else "Total worked: —"
-    if ongoing:
-        total_label += " *(plus an ongoing session)*"
-    st.markdown(total_label)
-else:
-    st.caption("No swipe details available.")
-
-st.subheader(f"🕑 Already logged in KaryaKeeper ({len(existing_entries)})")
-if existing_entries:
-    st.caption("These entries are already saved in KaryaKeeper and are shown here for reference only.")
-    logged_rows = [
-        {
-            "Start": entry["start"],
-            "End": entry["end"],
-            "Duration": fmt_minutes(duration_minutes(entry["start"], entry["end"])),
-            "Project": entry["project"],
-            "Task": entry["task"],
-            "Remark": entry["remark"],
-        }
-        for entry in sorted(existing_entries, key=lambda item: (item["start"], item["end"]))
-    ]
-    st.dataframe(logged_rows, hide_index=True, use_container_width=True)
-else:
-    st.caption("No entries are logged for this date.")
+        if all(e.get("saved") or e.get("skipped") for e in entries):
+            st.success("All rows are complete. Saved entries are in KaryaKeeper; skipped rows stayed local.", icon="✅")
