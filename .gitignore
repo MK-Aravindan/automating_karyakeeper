@@ -24,4 +24,7 @@ __pycache__/
 .playwright-mcp/
 karyakeeper-*.png
 
+# Local test suite (not part of the distributed app)
+tests/
+
 CLAUDE.md
